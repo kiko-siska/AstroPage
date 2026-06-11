@@ -1,0 +1,15 @@
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+WORKDIR /app
+
+# Install all deps including dev
+COPY pyproject.toml .
+RUN uv sync --extra dev
+
+# Source is volume-mounted at runtime for live reload
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
