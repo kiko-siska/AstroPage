@@ -76,7 +76,9 @@ def test_order_rejects_invalid_letter(auth_client):
 
 
 def test_bulk_signup_requires_auth(client):
-    res = client.post("/api/v1/canteen/bulk-signup", json={"days_count": 5, "preferred_choice": "A"})
+    res = client.post(
+        "/api/v1/canteen/bulk-signup", json={"days_count": 5, "preferred_choice": "A"}
+    )
     assert res.status_code == 401
 
 

@@ -37,7 +37,9 @@ def _open_day(day: date, ordered: str | None = None) -> MealDay:
 
 
 def _closed_day(day: date) -> MealDay:
-    return MealDay(date=day, open=False, title=None, options=[], ordered_meal=None, can_be_changed_until=None)
+    return MealDay(
+        date=day, open=False, title=None, options=[], ordered_meal=None, can_be_changed_until=None
+    )
 
 
 async def test_bulk_signup_starts_tomorrow_and_orders_preferred(monkeypatch):
@@ -49,7 +51,12 @@ async def test_bulk_signup_starts_tomorrow_and_orders_preferred(monkeypatch):
         requested_days.extend(days)
         # day 0 open & free → order; day 1 closed → skip;
         # day 2 already ordered → skip; day 3 open & free → order.
-        return [_open_day(days[0]), _closed_day(days[1]), _open_day(days[2], "B"), _open_day(days[3])]
+        return [
+            _open_day(days[0]),
+            _closed_day(days[1]),
+            _open_day(days[2], "B"),
+            _open_day(days[3]),
+        ]
 
     async def fake_order(edupage, day, choice):
         ordered.append((day, choice))
