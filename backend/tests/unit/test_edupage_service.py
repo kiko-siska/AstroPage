@@ -100,7 +100,7 @@ def _decode_eqap(body: str) -> dict[str, list[str]]:
     return urllib.parse.parse_qs(base64.b64decode(urllib.parse.unquote(eqap)).decode())
 
 
-def test_set_homework_done_posts_homework_flag(monkeypatch):
+def _fake_edupage(resp_json, subdomain="myschool"):
     sent = {}
 
     class FakeResp:
@@ -108,53 +108,46 @@ def test_set_homework_done_posts_homework_flag(monkeypatch):
             pass
 
         def json(self):
-            return {"timelineUserProps": {}}
+            return resp_json
 
     def fake_post(url, data, headers):
         sent["url"] = url
         sent["data"] = data
         return FakeResp()
 
-    edupage = SimpleNamespace(subdomain="myschool", session=SimpleNamespace(post=fake_post))
+    return SimpleNamespace(subdomain=subdomain, session=SimpleNamespace(post=fake_post)), sent
 
-    _set_homework_done_blocking(edupage, "98765", True)
+
+def test_set_homework_done_posts_superid_homework_flag():
+    # EduPage confirms by echoing doneMaxCas for the timeline id.
+    edupage, sent = _fake_edupage(
+        {"timelineUserProps": {"98765": {"doneMaxCas": "2026-01-01 10:00:00"}}}
+    )
+
+    _set_homework_done_blocking(edupage, "36627", "98765", True)
 
     assert sent["url"] == "https://myschool.edupage.org/timeline/?akcia=homeworkFlag"
     fields = _decode_eqap(sent["data"])
-    assert fields["homeworkid"] == ["timeline:98765"]
+    assert fields["homeworkid"] == ["superid:36627"]  # not "timeline:<id>"
     assert fields["flag"] == ["done"]
     assert fields["value"] == ["1"]
 
 
 def test_set_homework_done_clear_sends_zero():
-    captured = {}
-
-    class FakeResp:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"timelineUserProps": {}}
-
-    def fake_post(url, data, headers):
-        captured["data"] = data
-        return FakeResp()
-
-    edupage = SimpleNamespace(subdomain="s", session=SimpleNamespace(post=fake_post))
-    _set_homework_done_blocking(edupage, "1", False)
-    assert _decode_eqap(captured["data"])["value"] == ["0"]
+    # Clearing: no doneMaxCas for the item confirms not-done.
+    edupage, sent = _fake_edupage({"timelineUserProps": {"1": {}}})
+    _set_homework_done_blocking(edupage, "36627", "1", False)
+    assert _decode_eqap(sent["data"])["value"] == ["0"]
 
 
 def test_set_homework_done_without_userprops_raises():
-    class FakeResp:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"status": "fail"}  # no timelineUserProps → refusal
-
-    edupage = SimpleNamespace(
-        subdomain="s", session=SimpleNamespace(post=lambda url, data, headers: FakeResp())
-    )
+    edupage, _ = _fake_edupage({"status": "fail"})  # no timelineUserProps → refusal
     with pytest.raises(EduPageDataError):
-        _set_homework_done_blocking(edupage, "1", True)
+        _set_homework_done_blocking(edupage, "36627", "1", True)
+
+
+def test_set_homework_done_not_applied_raises():
+    # 200 with userProps but the item never got doneMaxCas → change didn't stick.
+    edupage, _ = _fake_edupage({"timelineUserProps": {"1": {}}})
+    with pytest.raises(EduPageDataError):
+        _set_homework_done_blocking(edupage, "36627", "1", True)

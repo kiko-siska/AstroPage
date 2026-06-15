@@ -31,12 +31,16 @@ async def list_attachments(edupage: Edupage, assignment_id: str) -> list[Homewor
 
 
 async def set_done(edupage: Edupage, assignment_id: str, done: bool) -> None:
-    """Mark an assignment done / not done, verifying it exists in the student's
-    own timeline first so a stale or forged id can't be toggled."""
+    """Mark an assignment done / not done. Resolves the assignment from the
+    student's own timeline first (so a stale or forged id can't be toggled) and
+    uses its `superid` — the form EduPage's homeworkFlag action requires."""
     assignments = await edupage_service.fetch_homework(edupage)
-    if not any(a.id == assignment_id for a in assignments):
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if assignment is None:
         raise EduPageDataError("not_found", "That assignment was not found on EduPage.")
-    await edupage_service.set_homework_done(edupage, assignment_id, done)
+    if not assignment.superid:
+        raise EduPageDataError("not_found", "This assignment can't be marked done on EduPage.")
+    await edupage_service.set_homework_done(edupage, assignment.superid, assignment.id, done)
 
 
 async def get_cached_draft(

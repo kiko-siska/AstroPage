@@ -364,13 +364,20 @@ async def fetch_homework_attachments(edupage: Edupage, superid: str) -> list[Hom
 # ── Homework done state ───────────────────────────────────────────────────────
 
 
-def _set_homework_done_blocking(edupage: Edupage, assignment_id: str, done: bool) -> None:
-    """Toggle the student's "done" flag on a timeline homework.
+def _set_homework_done_blocking(
+    edupage: Edupage, superid: str, timelineid: str, done: bool
+) -> None:
+    """Toggle the student's "done" flag on a homework via the timeline
+    "homeworkFlag" action.
 
-    edupage-api has no method for this, so we replicate the timeline "homeworkFlag"
-    call (verified against loumadev/EdupageAPI): the body uses the same eqap base64
-    encoding as the e-test endpoint, and `homeworkid` is the timeline id prefixed
-    with "timeline:". EduPage echoes the updated `timelineUserProps` on success.
+    The body uses the same eqap base64 encoding as the e-test endpoint. The
+    `homeworkid` must be the homework's own id in the form ``superid:<n>`` — the
+    plain timeline id does NOT work (EduPage accepts it but applies nothing).
+    Verified live against a real account.
+
+    EduPage echoes the full timeline back; we confirm the change actually took by
+    reading `doneMaxCas` for this timeline item out of the returned
+    `timelineUserProps`, rather than trusting a generic 200.
     """
     url = f"https://{edupage.subdomain}.edupage.org/timeline/?akcia=homeworkFlag"
     headers = {
@@ -379,21 +386,25 @@ def _set_homework_done_blocking(edupage: Edupage, assignment_id: str, done: bool
         "Referer": f"https://{edupage.subdomain}.edupage.org/",
     }
     payload = {
-        "homeworkid": f"timeline:{assignment_id}",
+        "homeworkid": f"superid:{superid}",
         "flag": "done",
         "value": "1" if done else "0",
     }
     resp = edupage.session.post(url, data=_edu_encode_body(payload), headers=headers)
     resp.raise_for_status()
-    body = resp.json()
-    if "timelineUserProps" not in body:
+    user_props = resp.json().get("timelineUserProps")
+    if not isinstance(user_props, dict):
         raise EduPageDataError("done_failed", "EduPage refused to update the homework state.")
 
+    is_done_now = bool(user_props.get(str(timelineid), {}).get("doneMaxCas"))
+    if is_done_now != done:
+        raise EduPageDataError("done_failed", "EduPage did not apply the homework change.")
 
-async def set_homework_done(edupage: Edupage, assignment_id: str, done: bool) -> None:
-    """Mark a homework as done / not done on EduPage."""
+
+async def set_homework_done(edupage: Edupage, superid: str, timelineid: str, done: bool) -> None:
+    """Mark a homework as done / not done on EduPage and confirm it applied."""
     try:
-        await asyncio.to_thread(_set_homework_done_blocking, edupage, assignment_id, done)
+        await asyncio.to_thread(_set_homework_done_blocking, edupage, superid, timelineid, done)
     except EduPageDataError:
         raise
     except Exception as exc:

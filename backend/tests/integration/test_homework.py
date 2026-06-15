@@ -154,12 +154,12 @@ def test_mark_done_requires_auth(client):
 
 def test_mark_done_toggles_state(auth_client, monkeypatch):
     async def fake_homework(edupage):
-        return [_hw(id="123", is_done=False)]
+        return [_hw(id="123", is_done=False, superid="36627")]
 
     calls: list = []
 
-    async def fake_set_done(edupage, assignment_id, done):
-        calls.append((assignment_id, done))
+    async def fake_set_done(edupage, superid, timelineid, done):
+        calls.append((superid, timelineid, done))
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
     monkeypatch.setattr(edupage_service, "set_homework_done", fake_set_done)
@@ -167,7 +167,18 @@ def test_mark_done_toggles_state(auth_client, monkeypatch):
     res = auth_client.post("/api/v1/homework/123/done", json={"done": True})
     assert res.status_code == 200
     assert res.json() == {"assignment_id": "123", "is_done": True}
-    assert calls == [("123", True)]
+    # superid (the EduPage flag id) and timeline id are forwarded.
+    assert calls == [("36627", "123", True)]
+
+
+def test_mark_done_without_superid_is_404(auth_client, monkeypatch):
+    async def fake_homework(edupage):
+        return [_hw(id="123", superid=None)]
+
+    monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
+
+    res = auth_client.post("/api/v1/homework/123/done", json={"done": True})
+    assert res.status_code == 404
 
 
 def test_mark_done_unknown_assignment_is_404(auth_client, monkeypatch):
@@ -182,9 +193,9 @@ def test_mark_done_unknown_assignment_is_404(auth_client, monkeypatch):
 
 def test_mark_done_edupage_refusal_is_502(auth_client, monkeypatch):
     async def fake_homework(edupage):
-        return [_hw(id="123")]
+        return [_hw(id="123", superid="36627")]
 
-    async def fake_set_done(edupage, assignment_id, done):
+    async def fake_set_done(edupage, superid, timelineid, done):
         raise EduPageDataError("done_failed", "EduPage refused to update the homework state.")
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
