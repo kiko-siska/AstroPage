@@ -27,6 +27,16 @@ class HomeworkAttachment(BaseModel):
     extension: str | None = None
 
 
+class MarkDoneRequest(BaseModel):
+    # True marks the homework done, False clears it.
+    done: bool = True
+
+
+class MarkDoneResponse(BaseModel):
+    assignment_id: str
+    is_done: bool
+
+
 class GenerateAiRequest(BaseModel):
     assignment_id: str = Field(..., min_length=1, max_length=64)
     # Regenerate even when a cached draft exists.

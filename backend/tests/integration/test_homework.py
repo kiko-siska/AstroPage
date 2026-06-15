@@ -146,3 +146,49 @@ def test_attachments_unknown_assignment_is_404(auth_client, monkeypatch):
 
     res = auth_client.get("/api/v1/homework/nope/attachments")
     assert res.status_code == 404
+
+
+def test_mark_done_requires_auth(client):
+    assert client.post("/api/v1/homework/123/done", json={"done": True}).status_code == 401
+
+
+def test_mark_done_toggles_state(auth_client, monkeypatch):
+    async def fake_homework(edupage):
+        return [_hw(id="123", is_done=False)]
+
+    calls: list = []
+
+    async def fake_set_done(edupage, assignment_id, done):
+        calls.append((assignment_id, done))
+
+    monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
+    monkeypatch.setattr(edupage_service, "set_homework_done", fake_set_done)
+
+    res = auth_client.post("/api/v1/homework/123/done", json={"done": True})
+    assert res.status_code == 200
+    assert res.json() == {"assignment_id": "123", "is_done": True}
+    assert calls == [("123", True)]
+
+
+def test_mark_done_unknown_assignment_is_404(auth_client, monkeypatch):
+    async def fake_homework(edupage):
+        return []
+
+    monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
+
+    res = auth_client.post("/api/v1/homework/nope/done", json={"done": True})
+    assert res.status_code == 404
+
+
+def test_mark_done_edupage_refusal_is_502(auth_client, monkeypatch):
+    async def fake_homework(edupage):
+        return [_hw(id="123")]
+
+    async def fake_set_done(edupage, assignment_id, done):
+        raise EduPageDataError("done_failed", "EduPage refused to update the homework state.")
+
+    monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
+    monkeypatch.setattr(edupage_service, "set_homework_done", fake_set_done)
+
+    res = auth_client.post("/api/v1/homework/123/done", json={"done": True})
+    assert res.status_code == 502

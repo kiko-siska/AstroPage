@@ -54,6 +54,9 @@ export default function HomeworkPage() {
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [selected, setSelected] = useState<Homework | null>(null);
   const [ai, setAi] = useState<AiState>({ phase: "idle" });
+  // Assignment ids with an in-flight done-toggle, and a transient error toast.
+  const [togglingDone, setTogglingDone] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +105,34 @@ export default function HomeworkPage() {
     // Simulated AI pipeline latency.
     setTimeout(() => setAi({ phase: "success", draft: buildAiDraft(hw) }), 1800);
   }
+
+  // Optimistically flip the done flag, rolling back if EduPage rejects it.
+  async function toggleDone(hw: Homework, done: boolean) {
+    const apply = (submitted: boolean) => {
+      setHomework((list) => list.map((h) => (h.id === hw.id ? { ...h, submitted } : h)));
+      setSelected((cur) => (cur && cur.id === hw.id ? { ...cur, submitted } : cur));
+    };
+    setTogglingDone((prev) => new Set(prev).add(hw.id));
+    apply(done);
+    try {
+      await api.setHomeworkDone(hw.id, done);
+    } catch (err) {
+      apply(!done); // roll back
+      setToast((err as { detail?: string })?.detail ?? "Could not update homework on EduPage.");
+    } finally {
+      setTogglingDone((prev) => {
+        const next = new Set(prev);
+        next.delete(hw.id);
+        return next;
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [toast]);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 lg:px-10">
@@ -206,10 +237,22 @@ export default function HomeworkPage() {
           key={selected.id}
           homework={selected}
           ai={ai}
+          doneBusy={togglingDone.has(selected.id)}
+          onToggleDone={(done) => toggleDone(selected, done)}
           onRunAi={() => runAi(selected)}
           onEditDraft={(draft) => setAi({ phase: "success", draft })}
           onClose={closeDetail}
         />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 z-[60] flex max-w-md -translate-x-1/2 items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/15 px-4 py-3 text-sm text-red-200 shadow-2xl"
+        >
+          <X className="size-4 shrink-0" aria-hidden />
+          <span className="min-w-0">{toast}</span>
+        </div>
       )}
     </div>
   );
@@ -219,12 +262,22 @@ export default function HomeworkPage() {
 interface DrawerProps {
   homework: Homework;
   ai: AiState;
+  doneBusy: boolean;
+  onToggleDone: (done: boolean) => void;
   onRunAi: () => void;
   onEditDraft: (draft: string) => void;
   onClose: () => void;
 }
 
-function DetailDrawer({ homework, ai, onRunAi, onEditDraft, onClose }: DrawerProps) {
+function DetailDrawer({
+  homework,
+  ai,
+  doneBusy,
+  onToggleDone,
+  onRunAi,
+  onEditDraft,
+  onClose,
+}: DrawerProps) {
   const status = getHomeworkStatus(homework);
   const wide = ai.phase === "success";
 
@@ -306,6 +359,26 @@ function DetailDrawer({ homework, ai, onRunAi, onEditDraft, onClose }: DrawerPro
         <div className="flex-1 px-6 py-6">
           {ai.phase !== "success" && (
             <>
+              <button
+                type="button"
+                onClick={() => onToggleDone(!homework.submitted)}
+                disabled={doneBusy}
+                aria-pressed={homework.submitted}
+                className={[
+                  "mb-5 flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-70",
+                  homework.submitted
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                    : "cursor-pointer border-slate-700 text-slate-200 hover:border-emerald-500/50 hover:bg-emerald-500/10 hover:text-emerald-300",
+                ].join(" ")}
+              >
+                {doneBusy ? (
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <CheckCircle2 className="size-4" aria-hidden />
+                )}
+                {homework.submitted ? "Done — mark as not done" : "Mark as done"}
+              </button>
+
               <h3 className="text-sm font-semibold text-slate-300">Instructions</h3>
               <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-400">
                 {homework.description}

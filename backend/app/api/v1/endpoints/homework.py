@@ -11,6 +11,8 @@ from app.schemas.homework import (
     GenerateAiRequest,
     HomeworkAttachment,
     HomeworkItem,
+    MarkDoneRequest,
+    MarkDoneResponse,
 )
 from app.services import homework_service
 from app.services.ai_service import AiUnavailableError
@@ -61,6 +63,23 @@ async def list_attachments(
         HomeworkAttachment(name=a.name, url=a.url, type=a.type, extension=a.extension)
         for a in attachments
     ]
+
+
+@router.post("/{assignment_id}/done", response_model=MarkDoneResponse)
+async def mark_done(
+    assignment_id: str,
+    payload: MarkDoneRequest,
+    edupage: Annotated[Edupage, Depends(get_edupage_client)],
+) -> MarkDoneResponse:
+    """Mark an assignment done / not done on EduPage (student-initiated)."""
+    try:
+        await homework_service.set_done(edupage, assignment_id, payload.done)
+    except EduPageDataError as exc:
+        code = (
+            status.HTTP_404_NOT_FOUND if exc.reason == "not_found" else status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(status_code=code, detail=exc.message)
+    return MarkDoneResponse(assignment_id=assignment_id, is_done=payload.done)
 
 
 @router.post("/generate-ai", response_model=DraftResponse)

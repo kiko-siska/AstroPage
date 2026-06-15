@@ -124,6 +124,11 @@ export const api = {
   },
   listHomeworkAttachments: (id: string) =>
     request<HomeworkAttachment[]>(`/homework/${encodeURIComponent(id)}/attachments`),
+  setHomeworkDone: (id: string, done: boolean) =>
+    request<{ assignment_id: string; is_done: boolean }>(
+      `/homework/${encodeURIComponent(id)}/done`,
+      { method: "POST", body: JSON.stringify({ done }) },
+    ),
   listMeals: (weeks = 3) => request<MealDayDTO[]>(`/canteen/meals?weeks=${weeks}`),
   // `choice` is a menu letter ("A", "B", …), or null to sign off the meal.
   orderMeal: (date: string, choice: string | null) =>

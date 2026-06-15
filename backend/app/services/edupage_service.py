@@ -361,6 +361,48 @@ async def fetch_homework_attachments(edupage: Edupage, superid: str) -> list[Hom
         )
 
 
+# ── Homework done state ───────────────────────────────────────────────────────
+
+
+def _set_homework_done_blocking(edupage: Edupage, assignment_id: str, done: bool) -> None:
+    """Toggle the student's "done" flag on a timeline homework.
+
+    edupage-api has no method for this, so we POST to the timeline "todo" module
+    directly, following the same url-encoded `akcia=` convention the library uses
+    for its other timeline writes. `assignment_id` is the timelineid.
+
+    NOTE: the exact action name / payload below is best-effort and should be
+    verified against a live DevTools capture (toggling "done" on EduPage). It is
+    isolated here so only this one call needs adjusting. EduPage returns JSON
+    with a non-empty "error" field when it refuses the change.
+    """
+    url = f"https://{edupage.subdomain}.edupage.org/timeline/?akcia=setHomeworkDone"
+    payload = {"homeworkid": str(assignment_id), "done": "1" if done else "0"}
+    resp = edupage.session.post(
+        url,
+        data=urllib.parse.urlencode(payload),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    resp.raise_for_status()
+    try:
+        body = resp.json()
+    except ValueError:
+        return  # non-JSON 200 — treat as success
+    if isinstance(body, dict) and body.get("error"):
+        raise EduPageDataError("done_failed", "EduPage refused to update the homework state.")
+
+
+async def set_homework_done(edupage: Edupage, assignment_id: str, done: bool) -> None:
+    """Mark a homework as done / not done on EduPage."""
+    try:
+        await asyncio.to_thread(_set_homework_done_blocking, edupage, assignment_id, done)
+    except EduPageDataError:
+        raise
+    except Exception as exc:
+        logger.warning("homework done toggle failed: err=%s", type(exc).__name__)
+        raise EduPageDataError("done_failed", "Could not update the homework state on EduPage.")
+
+
 @dataclass
 class MealMenu:
     letter: str
