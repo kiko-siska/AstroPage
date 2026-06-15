@@ -367,28 +367,26 @@ async def fetch_homework_attachments(edupage: Edupage, superid: str) -> list[Hom
 def _set_homework_done_blocking(edupage: Edupage, assignment_id: str, done: bool) -> None:
     """Toggle the student's "done" flag on a timeline homework.
 
-    edupage-api has no method for this, so we POST to the timeline "todo" module
-    directly, following the same url-encoded `akcia=` convention the library uses
-    for its other timeline writes. `assignment_id` is the timelineid.
-
-    NOTE: the exact action name / payload below is best-effort and should be
-    verified against a live DevTools capture (toggling "done" on EduPage). It is
-    isolated here so only this one call needs adjusting. EduPage returns JSON
-    with a non-empty "error" field when it refuses the change.
+    edupage-api has no method for this, so we replicate the timeline "homeworkFlag"
+    call (verified against loumadev/EdupageAPI): the body uses the same eqap base64
+    encoding as the e-test endpoint, and `homeworkid` is the timeline id prefixed
+    with "timeline:". EduPage echoes the updated `timelineUserProps` on success.
     """
-    url = f"https://{edupage.subdomain}.edupage.org/timeline/?akcia=setHomeworkDone"
-    payload = {"homeworkid": str(assignment_id), "done": "1" if done else "0"}
-    resp = edupage.session.post(
-        url,
-        data=urllib.parse.urlencode(payload),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
+    url = f"https://{edupage.subdomain}.edupage.org/timeline/?akcia=homeworkFlag"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": f"https://{edupage.subdomain}.edupage.org/",
+    }
+    payload = {
+        "homeworkid": f"timeline:{assignment_id}",
+        "flag": "done",
+        "value": "1" if done else "0",
+    }
+    resp = edupage.session.post(url, data=_edu_encode_body(payload), headers=headers)
     resp.raise_for_status()
-    try:
-        body = resp.json()
-    except ValueError:
-        return  # non-JSON 200 — treat as success
-    if isinstance(body, dict) and body.get("error"):
+    body = resp.json()
+    if "timelineUserProps" not in body:
         raise EduPageDataError("done_failed", "EduPage refused to update the homework state.")
 
 
