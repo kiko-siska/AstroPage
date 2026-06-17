@@ -412,6 +412,73 @@ async def set_homework_done(edupage: Edupage, superid: str, timelineid: str, don
         raise EduPageDataError("done_failed", "Could not update the homework state on EduPage.")
 
 
+# ── Grades ────────────────────────────────────────────────────────────────────
+# EduPage grades are 1 (best) – 5 (worst). Each carries an "importance" factor
+# (the library's `importance` = EduPage's raw weight / 20); we surface the raw
+# weight points so the frontend sandbox can recompute weighted averages itself.
+
+
+@dataclass
+class StudentGrade:
+    id: str
+    subject_name: str
+    # Display value as shown on EduPage (e.g. "1"); verbal grades keep their text.
+    value: str
+    # Numeric grade for averaging, or None for verbal / non-numeric entries.
+    numeric_value: float | None
+    # EduPage weight points (importance * 20); 20 == a normal-weight grade.
+    weight: int
+    description: str
+    date: date | None
+
+
+def _format_grade_value(grade_n: object) -> str:
+    """EduPage returns whole grades as floats (1.0); render them without the
+    trailing ".0" while leaving genuine decimals and verbal text intact."""
+    if isinstance(grade_n, float) and grade_n.is_integer():
+        return str(int(grade_n))
+    return str(grade_n)
+
+
+def _grades_blocking(edupage: Edupage) -> list[StudentGrade]:
+    grades: list[StudentGrade] = []
+    for grade in edupage.get_grades():
+        if grade.subject_name is None:
+            continue
+
+        # `importance` is None for points-only grades; treat a missing factor as
+        # the default normal weight so they still participate in the average.
+        importance = grade.importance if grade.importance is not None else 1.0
+        weight = round(importance * 20)
+
+        numeric: float | None
+        if not grade.verbal and isinstance(grade.grade_n, (int, float)):
+            numeric = float(grade.grade_n)
+        else:
+            numeric = None
+
+        grades.append(
+            StudentGrade(
+                id=str(grade.event_id),
+                subject_name=grade.subject_name,
+                value=_format_grade_value(grade.grade_n),
+                numeric_value=numeric,
+                weight=weight,
+                description=grade.title or grade.comment or "Grade",
+                date=grade.date.date() if grade.date else None,
+            )
+        )
+    return grades
+
+
+async def fetch_grades(edupage: Edupage) -> list[StudentGrade]:
+    try:
+        return await asyncio.to_thread(_grades_blocking, edupage)
+    except Exception as exc:
+        logger.warning("grades fetch failed: err=%s", type(exc).__name__)
+        raise EduPageDataError("grades_failed", "Could not load grades from EduPage.")
+
+
 @dataclass
 class MealMenu:
     letter: str

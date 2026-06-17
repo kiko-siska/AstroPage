@@ -47,3 +47,5 @@ Thumbs.db
 /page-*.png
 /*-page.png
 /frontend/src/pages/ErrorPage.tsx
+/backend/scripts/eduapi.ipynb
+/backend/scripts/hw.ipynb

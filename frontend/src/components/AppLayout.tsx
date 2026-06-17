@@ -1,10 +1,21 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { Home, BookOpen, GraduationCap, UtensilsCrossed, UserCog, LogOut, Rocket } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
 
 const COPPER = "#B08D57";
 const COPPER_DIM = "rgba(176,141,87,0.12)";
 const MUTED = "rgba(232,220,199,0.52)";
 const ACTIVE_SHADOW = "inset 2px 0 0 #B08D57";
+
+
+const NAV_ITEMS: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
+  { to: "/", label: "Home", icon: Home, end: true },
+  { to: "/homework", label: "Homework", icon: BookOpen },
+  { to: "/grades", label: "Grades", icon: GraduationCap },
+  { to: "/canteen", label: "Canteen", icon: UtensilsCrossed },
+];
 
 const itemBase: React.CSSProperties = {
   display: "flex",

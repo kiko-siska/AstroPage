@@ -101,6 +101,56 @@ export interface MealDayDTO {
   can_be_changed_until: string | null;
 }
 
+// ── Grades wire shapes (snake_case, nullable fields) ────────────────────────
+
+interface GradeDTO {
+  id: string;
+  value: string;
+  weight: number;
+  description: string;
+  date: string | null; // "YYYY-MM-DD"
+}
+
+interface SubjectGradesDTO {
+  subject_name: string;
+  current_average: number | null;
+  grades: GradeDTO[];
+}
+
+interface GradesResponseDTO {
+  subjects: SubjectGradesDTO[];
+}
+
+/** One official grade on a subject's report card. */
+export interface Grade {
+  id: string;
+  value: string;
+  weight: number;
+  description: string;
+  date: string | null;
+}
+
+/** A subject with its grades and EduPage's weighted average. */
+export interface SubjectGrades {
+  subjectName: string;
+  currentAverage: number | null;
+  grades: Grade[];
+}
+
+function toSubjectGrades(dto: SubjectGradesDTO): SubjectGrades {
+  return {
+    subjectName: dto.subject_name,
+    currentAverage: dto.current_average,
+    grades: dto.grades.map((g) => ({
+      id: g.id,
+      value: g.value,
+      weight: g.weight,
+      description: g.description,
+      date: g.date,
+    })),
+  };
+}
+
 export interface OrderResponseDTO {
   date: string;
   ordered_meal: string | null;
@@ -129,6 +179,10 @@ export const api = {
       `/homework/${encodeURIComponent(id)}/done`,
       { method: "POST", body: JSON.stringify({ done }) },
     ),
+  listGrades: async (): Promise<SubjectGrades[]> => {
+    const body = await request<GradesResponseDTO>("/grades");
+    return body.subjects.map(toSubjectGrades);
+  },
   listMeals: (weeks = 3) => request<MealDayDTO[]>(`/canteen/meals?weeks=${weeks}`),
   // `choice` is a menu letter ("A", "B", …), or null to sign off the meal.
   orderMeal: (date: string, choice: string | null) =>

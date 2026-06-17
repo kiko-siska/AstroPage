@@ -4,6 +4,7 @@ import AppLayout from "./components/AppLayout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import HomeworkPage from "./pages/Homework";
+import GradesPage from "./pages/Grades";
 import CanteenPage from "./pages/Canteen";
 import SettingsPage from "./pages/Settings";
 
@@ -41,6 +42,7 @@ function Root() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/homework" element={<HomeworkPage />} />
+        <Route path="/grades" element={<GradesPage />} />
         <Route path="/canteen" element={<CanteenPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
