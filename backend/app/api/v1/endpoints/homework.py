@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from edupage_api import Edupage
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthContext, get_auth_context, get_edupage_client
@@ -111,4 +111,26 @@ async def generate_ai(
         draft=draft.ai_response,
         cached=cached,
         created_at=draft.created_at,
+    )
+
+
+@router.get("/{assignment_id}/draft.md")
+async def download_draft(
+    assignment_id: str,
+    ctx: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    """Return the cached AI draft as a downloadable Markdown file."""
+    cached = await homework_service.get_cached_draft(db, ctx.user, assignment_id)
+    if cached is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No draft found for this assignment. Generate one first.",
+        )
+    return Response(
+        content=cached.ai_response,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="draft-{assignment_id}.md"',
+        },
     )

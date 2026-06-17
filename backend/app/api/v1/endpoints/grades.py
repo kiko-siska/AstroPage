@@ -30,6 +30,7 @@ async def list_grades(
             SubjectGradesOut(
                 subject_name=s.subject_name,
                 current_average=s.current_average,
+                is_points=s.is_points,
                 grades=[
                     GradeOut(
                         id=g.id,
@@ -37,6 +38,7 @@ async def list_grades(
                         weight=g.weight,
                         description=g.description,
                         date=g.date,
+                        max_points=g.max_points,
                     )
                     for g in s.grades
                 ],

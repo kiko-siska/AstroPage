@@ -3,6 +3,7 @@
 import base64
 import json
 import urllib.parse
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,8 @@ from app.services.edupage_service import (
     _collect_files,
     _edu_encode_body,
     _etest_files_blocking,
+    _grades_blocking,
+    _order_blocking,
     _set_homework_done_blocking,
 )
 
@@ -151,3 +154,117 @@ def test_set_homework_done_not_applied_raises():
     edupage, _ = _fake_edupage({"timelineUserProps": {"1": {}}})
     with pytest.raises(EduPageDataError):
         _set_homework_done_blocking(edupage, "36627", "1", True)
+
+
+# ── Meal ordering: verify-after-write ─────────────────────────────────────────
+# edupage-api sets `ordered_meal` optimistically and only raises on a hard
+# error, so the service re-reads the day to confirm an order actually landed.
+
+
+class _FakeLunch:
+    """Mimics edupage-api's Meal: `choose`/`sign_off` update `ordered_meal`
+    optimistically, but only touch the shared `server` dict when it persists."""
+
+    def __init__(self, server: dict):
+        self._server = server
+        self.amount_of_foods = 2
+        self.ordered_meal = server["ordered"]
+
+    def choose(self, edupage, number):
+        letter = "ABCDEFGH"[number - 1]
+        self.ordered_meal = letter  # optimistic, like the real library
+        if self._server["persist"]:
+            self._server["ordered"] = letter
+
+    def sign_off(self, edupage):
+        self.ordered_meal = None
+        if self._server["persist"]:
+            self._server["ordered"] = None
+
+
+class _FakeEdupage:
+    def __init__(self, server: dict):
+        self._server = server
+
+    def get_meals(self, day):
+        # Each fetch reflects the current server state (fresh object).
+        return SimpleNamespace(lunch=_FakeLunch(self._server))
+
+
+def test_order_blocking_returns_choice_when_it_persists():
+    server = {"ordered": None, "persist": True}
+    result = _order_blocking(_FakeEdupage(server), date(2026, 6, 15), "A")
+    assert result == "A"
+    assert server["ordered"] == "A"
+
+
+def test_order_blocking_raises_when_order_silently_ignored():
+    # The far-future-day case: choose() doesn't raise, but the re-read shows the
+    # order never landed → must surface as an error, not a false success.
+    server = {"ordered": None, "persist": False}
+    with pytest.raises(EduPageDataError) as exc:
+        _order_blocking(_FakeEdupage(server), date(2026, 6, 15), "A")
+    assert exc.value.reason == "order_not_persisted"
+
+
+def test_order_blocking_sign_off_confirmed():
+    server = {"ordered": "A", "persist": True}
+    assert _order_blocking(_FakeEdupage(server), date(2026, 6, 15), None) is None
+    assert server["ordered"] is None
+
+
+# ── Grades: the "A" (absent) mark counts as a 5 ───────────────────────────────
+
+
+def _fake_edu_grade(grade_n, *, verbal=False, importance=1.0, max_points=None):
+    return SimpleNamespace(
+        event_id=1,
+        subject_name="Mathematics",
+        grade_n=grade_n,
+        verbal=verbal,
+        importance=importance,
+        max_points=max_points,
+        title="Test",
+        comment=None,
+        date=None,
+    )
+
+
+def test_absent_mark_counts_as_five():
+    edupage = SimpleNamespace(get_grades=lambda: [_fake_edu_grade("A", verbal=True)])
+    [grade] = _grades_blocking(edupage)
+    assert grade.value == "A"
+    assert grade.numeric_value == 5.0  # drags the average down, not dropped as verbal
+
+
+def test_absent_mark_in_points_subject_counts_as_zero():
+    # "A/20": absent in a points subject → 0 earned (not 5, which would corrupt
+    # the percentage). Keeps the simulated average in step with the official one.
+    edupage = SimpleNamespace(get_grades=lambda: [_fake_edu_grade("A", verbal=True, max_points=20.0)])
+    [grade] = _grades_blocking(edupage)
+    assert grade.value == "A"
+    assert grade.max_points == 20.0
+    assert grade.numeric_value == 0.0
+
+
+def test_partial_decimal_points_grade_is_parsed():
+    # EduPage keeps "14.75" as a string (str.isdigit() rejects the dot); it must
+    # still be counted, not dropped.
+    edupage = SimpleNamespace(get_grades=lambda: [_fake_edu_grade("14.75", max_points=15.0)])
+    [grade] = _grades_blocking(edupage)
+    assert grade.value == "14.75"
+    assert grade.numeric_value == 14.75
+    assert grade.max_points == 15.0
+
+
+def test_other_verbal_marks_stay_non_numeric():
+    edupage = SimpleNamespace(get_grades=lambda: [_fake_edu_grade("Absent", verbal=True)])
+    [grade] = _grades_blocking(edupage)
+    assert grade.numeric_value is None
+
+
+def test_normal_numeric_grade_unchanged():
+    edupage = SimpleNamespace(get_grades=lambda: [_fake_edu_grade(2.0)])
+    [grade] = _grades_blocking(edupage)
+    assert grade.value == "2"
+    assert grade.numeric_value == 2.0

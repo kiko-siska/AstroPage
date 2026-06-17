@@ -1,69 +1,152 @@
 import { useEffect, useMemo, useState } from "react";
-import { FlaskConical, GraduationCap, Plus, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { api, type Grade, type SubjectGrades } from "../api/client";
+import { cachedFetch, peekCache } from "../api/cache";
 
 // A grade inside the sandbox: every official grade is copied in, hypotheticals
-// are appended with `simulated: true` so the UI can distinguish them.
+// are appended with `simulated: true`. Official grades can be temporarily
+// `hidden` to see how the average would look without them.
 interface SimGrade extends Grade {
   simulated: boolean;
+  hidden: boolean;
 }
 
-const GRADE_VALUES = ["1", "2", "3", "4", "5"] as const;
+const GRADES_CACHE_KEY = "grades";
 
-// EduPage scale is 1 (best) – 5 (worst); colour badges accordingly.
-function gradeBadgeClass(value: string): string {
-  switch (value) {
-    case "1":
-      return "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30";
-    case "2":
-      return "bg-lime-500/15 text-lime-300 ring-lime-500/30";
-    case "3":
-      return "bg-amber-500/15 text-amber-300 ring-amber-500/30";
-    case "4":
-      return "bg-orange-500/15 text-orange-300 ring-orange-500/30";
-    case "5":
-      return "bg-red-500/15 text-red-300 ring-red-500/30";
-    default:
-      return "bg-slate-500/15 text-slate-300 ring-slate-500/30";
+// EduPage scale is 1 (best) – 5 (worst). Earthy, desaturated badges that sit
+// in the copper/cream palette — green → amber → red, matching the app's
+// done/soon/overdue semantic tones.
+interface GradeTone {
+  text: string;
+  bg: string;
+  border: string;
+}
+
+const TONES: GradeTone[] = [
+  { text: "#88c8a0", bg: "rgba(50,90,60,0.18)", border: "rgba(50,90,60,0.42)" }, // best
+  { text: "#b6c887", bg: "rgba(74,90,40,0.18)", border: "rgba(74,90,40,0.42)" },
+  { text: "#d4a85a", bg: "rgba(110,78,20,0.2)", border: "rgba(110,78,20,0.42)" },
+  { text: "#d0875a", bg: "rgba(110,58,20,0.2)", border: "rgba(110,58,20,0.42)" },
+  { text: "#c88888", bg: "rgba(90,40,40,0.2)", border: "rgba(90,40,40,0.42)" }, // worst
+];
+
+const NEUTRAL_TONE: GradeTone = {
+  text: "rgba(232,220,199,0.5)",
+  bg: "rgba(232,220,199,0.05)",
+  border: "rgba(176,141,87,0.18)",
+};
+
+// EduPage's "A" (absent) mark counts as a 5 until the test is made up.
+function isAbsent(value: string): boolean {
+  return value.trim().toUpperCase() === "A";
+}
+
+// Numeric value of a classic grade for averaging — "A" resolves to 5.
+function classicNumeric(value: string): number {
+  return isAbsent(value) ? 5 : Number(value);
+}
+
+function classicTone(value: string): GradeTone {
+  if (isAbsent(value)) return TONES[4]; // absent → worst (red)
+  const n = Number(value);
+  if (n >= 1 && n <= 5) return TONES[n - 1];
+  return NEUTRAL_TONE;
+}
+
+// Higher percentage is better, so map the band onto the same 5-tone ramp.
+function percentTone(pct: number): GradeTone {
+  if (pct >= 90) return TONES[0];
+  if (pct >= 75) return TONES[1];
+  if (pct >= 60) return TONES[2];
+  if (pct >= 45) return TONES[3];
+  return TONES[4];
+}
+
+function gradePercent(g: Pick<Grade, "value" | "maxPoints">): number {
+  if (isAbsent(g.value)) return 0; // absent → 0 points earned
+  if (g.maxPoints == null || g.maxPoints <= 0) return 100; // e.g. a 1/0 grade
+  return (Number(g.value) / g.maxPoints) * 100;
+}
+
+function toneFor(g: Pick<Grade, "value" | "maxPoints">): GradeTone {
+  return g.maxPoints != null ? percentTone(gradePercent(g)) : classicTone(g.value);
+}
+
+// The same formulas the backend uses, run live over the (non-hidden) sandbox
+// grades so the student sees instant "what-if" updates.
+//  • classic : Σ(value × weight) / Σ(weight) on the 1–5 scale.
+//  • points  : Σ(earned) / Σ(max) × 100 as a percentage.
+function liveAverage(grades: SimGrade[], isPoints: boolean): number | null {
+  const active = grades.filter((g) => !g.hidden);
+  if (isPoints) {
+    let earned = 0;
+    let max = 0;
+    for (const g of active) {
+      if (g.maxPoints == null) continue;
+      // Absent ("A") counts as 0 earned points — matching the backend — so it
+      // drags the percentage down rather than being silently skipped.
+      const v = isAbsent(g.value) ? 0 : Number(g.value);
+      if (Number.isNaN(v)) continue;
+      earned += v;
+      max += g.maxPoints;
+    }
+    if (max <= 0) return null;
+    return Math.round((earned / max) * 10000) / 100;
   }
-}
-
-// Σ(value × weight) / Σ(weight) — the same formula the backend uses, run live
-// over the sandbox grades so the student sees instant "what-if" updates.
-function weightedAverage(grades: SimGrade[]): number | null {
   let totalWeight = 0;
   let total = 0;
-  for (const g of grades) {
-    const value = Number(g.value);
-    if (Number.isNaN(value) || g.weight <= 0) continue;
-    total += value * g.weight;
+  for (const g of active) {
+    const v = classicNumeric(g.value);
+    if (Number.isNaN(v) || g.weight <= 0) continue;
+    total += v * g.weight;
     totalWeight += g.weight;
   }
   if (totalWeight === 0) return null;
   return Math.round((total / totalWeight) * 100) / 100;
 }
 
-function formatAverage(avg: number | null): string {
-  return avg === null ? "—" : avg.toFixed(2);
+function formatAverage(avg: number | null, isPoints: boolean): string {
+  if (avg === null) return "—";
+  return isPoints ? `${Math.round(avg)} %` : avg.toFixed(2);
 }
 
+// ── Shared type styles ────────────────────────────────────────────────────────
+
+const eyebrow: React.CSSProperties = {
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 9,
+  letterSpacing: "0.18em",
+  textTransform: "uppercase",
+  color: "rgba(176,141,87,0.5)",
+};
+
+const fieldLabel: React.CSSProperties = {
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 9,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: "rgba(176,141,87,0.5)",
+  marginBottom: 5,
+};
+
 export default function GradesPage() {
-  const [subjects, setSubjects] = useState<SubjectGrades[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Seed from cache so flipping back to this tab renders instantly (no spinner,
+  // no refetch within the cache TTL).
+  const cached = peekCache<SubjectGrades[]>(GRADES_CACHE_KEY);
+  const [subjects, setSubjects] = useState<SubjectGrades[]>(cached ?? []);
+  const [loading, setLoading] = useState(cached === undefined);
   const [error, setError] = useState<string | null>(null);
-  const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
+  const [selectedSubject, setSelectedSubject] = useState<string | null>(cached?.[0]?.subjectName ?? null);
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listGrades()
+    cachedFetch(GRADES_CACHE_KEY, api.listGrades)
       .then((data) => {
         if (cancelled) return;
         setSubjects(data);
-        setSelectedSubject(data[0]?.subjectName ?? null);
+        setSelectedSubject((cur) => cur ?? data[0]?.subjectName ?? null);
       })
       .catch((err: { detail?: string }) => {
-        if (!cancelled) setError(err?.detail ?? "Could not load grades from EduPage.");
+        if (!cancelled) setError(err?.detail ?? "Nepodarilo sa načítať známky z EduPage.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -79,60 +162,113 @@ export default function GradesPage() {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8 lg:px-10">
-      <header className="mb-6">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-white">
-          <GraduationCap className="size-6 text-violet-300" aria-hidden />
-          Grades &amp; Sandbox
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Your official report card — and a sandbox to simulate upcoming grades.
-        </p>
-      </header>
+    <div style={{ padding: "36px 40px" }}>
+      {/* Header */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ ...eyebrow, marginBottom: 6 }}>Priemer · Simulácia</div>
+        <div
+          style={{
+            fontFamily: "'Cormorant Garamond', serif",
+            fontSize: 34,
+            fontWeight: 500,
+            color: "#E8DCC7",
+            letterSpacing: "-0.01em",
+            lineHeight: 1,
+          }}
+        >
+          Známky
+        </div>
+      </div>
 
       {error ? (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-red-300">{error}</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Try reloading, or log in again if your session expired.
+        <div
+          style={{
+            background: "rgba(90,40,40,0.2)",
+            border: "1px solid rgba(90,40,40,0.35)",
+            borderRadius: 10,
+            padding: "48px 24px",
+            textAlign: "center",
+          }}
+        >
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{error}</p>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>
+            Skúste znova alebo sa prihláste.
           </p>
         </div>
       ) : loading ? (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_1fr]">
-          <div className="space-y-3">
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {Array.from({ length: 5 }, (_, i) => (
               <div
                 key={i}
-                className="h-24 animate-pulse rounded-xl border border-slate-800 bg-slate-900/60"
+                style={{ height: 92, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }}
               />
             ))}
           </div>
-          <div className="h-96 animate-pulse rounded-xl border border-slate-800 bg-slate-900/60" />
+          <div style={{ height: 420, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
         </div>
       ) : subjects.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-800 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-slate-300">No grades yet.</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Once your teachers enter grades they'll show up here.
+        <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
+          <p style={{ ...eyebrow, color: "rgba(232,220,199,0.28)", margin: 0 }}>Zatiaľ žiadne známky.</p>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "8px 0 0" }}>
+            Keď učitelia zadajú známky, zobrazia sa tu.
           </p>
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_1fr]">
-          <ReportCard
-            subjects={subjects}
-            selected={selectedSubject}
-            onSelect={setSelectedSubject}
-          />
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20, alignItems: "start" }}>
+          <ReportCard subjects={subjects} selected={selectedSubject} onSelect={setSelectedSubject} />
           {selected ? (
             <Sandbox key={selected.subjectName} subject={selected} />
           ) : (
-            <div className="grid place-items-center rounded-xl border border-dashed border-slate-800 text-sm text-slate-500">
-              Select a subject to open the simulator.
+            <div
+              style={{
+                display: "grid",
+                placeItems: "center",
+                border: "1px dashed rgba(176,141,87,0.18)",
+                borderRadius: 10,
+                minHeight: 320,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 12,
+                color: "rgba(232,220,199,0.3)",
+              }}
+            >
+              Vyberte predmet pre simuláciu.
             </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+// ── Grade badge (classic square "2" or points pill "5/10") ────────────────────
+
+function GradeBadge({ grade, size = "sm", dimmed = false }: { grade: Pick<Grade, "value" | "maxPoints">; size?: "sm" | "lg"; dimmed?: boolean }) {
+  const tone = toneFor(grade);
+  const isPoints = grade.maxPoints != null;
+  const lg = size === "lg";
+  return (
+    <span
+      style={{
+        display: "grid",
+        placeItems: "center",
+        minWidth: lg ? 34 : 24,
+        height: lg ? 34 : 24,
+        padding: isPoints ? (lg ? "0 9px" : "0 6px") : 0,
+        borderRadius: 5,
+        flexShrink: 0,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: lg ? 13 : 11,
+        fontWeight: 500,
+        color: tone.text,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        opacity: dimmed ? 0.4 : 1,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {isPoints ? `${grade.value}/${grade.maxPoints}` : grade.value}
+    </span>
   );
 }
 
@@ -146,46 +282,73 @@ interface ReportCardProps {
 
 function ReportCard({ subjects, selected, onSelect }: ReportCardProps) {
   return (
-    <ul className="space-y-3" aria-label="Subjects">
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label="Predmety">
       {subjects.map((subject) => {
         const isActive = subject.subjectName === selected;
         return (
-          <li key={subject.subjectName}>
-            <button
-              type="button"
-              onClick={() => onSelect(subject.subjectName)}
-              aria-pressed={isActive}
-              className={[
-                "w-full cursor-pointer rounded-xl border p-4 text-left transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400",
-                isActive
-                  ? "border-violet-500/60 bg-violet-500/10"
-                  : "border-slate-800 bg-slate-900/60 hover:border-violet-500/40 hover:bg-slate-900",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="min-w-0 truncate font-semibold text-white">
-                  {subject.subjectName}
+          <button
+            key={subject.subjectName}
+            type="button"
+            onClick={() => onSelect(subject.subjectName)}
+            aria-pressed={isActive}
+            onMouseEnter={(e) => {
+              if (!isActive) e.currentTarget.style.borderColor = "rgba(176,141,87,0.3)";
+            }}
+            onMouseLeave={(e) => {
+              if (!isActive) e.currentTarget.style.borderColor = "rgba(176,141,87,0.14)";
+            }}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              cursor: "pointer",
+              background: isActive ? "rgba(176,141,87,0.12)" : "#161208",
+              border: `1px solid ${isActive ? "rgba(176,141,87,0.3)" : "rgba(176,141,87,0.14)"}`,
+              borderRadius: 10,
+              padding: 16,
+              transition: "border-color 0.15s, background 0.15s",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <span
+                style={{
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: "#E8DCC7",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {subject.subjectName}
+              </span>
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: isActive ? "#B08D57" : "rgba(176,141,87,0.75)",
+                  background: "rgba(176,141,87,0.08)",
+                  borderRadius: 5,
+                  padding: "3px 8px",
+                }}
+              >
+                {subject.isPoints ? "" : "Ø "}
+                {formatAverage(subject.currentAverage, subject.isPoints)}
+              </span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 12 }}>
+              {subject.grades.map((g) => (
+                <span key={g.id} title={`${g.description}${g.maxPoints != null ? "" : ` · váha ${g.weight}`}`}>
+                  <GradeBadge grade={g} />
                 </span>
-                <span className="shrink-0 rounded-lg bg-slate-800 px-2 py-1 text-sm font-semibold text-violet-200">
-                  Ø {formatAverage(subject.currentAverage)}
-                </span>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {subject.grades.map((g) => (
-                  <span
-                    key={g.id}
-                    title={`${g.description} · weight ${g.weight}`}
-                    className={`grid size-7 place-items-center rounded-md text-xs font-bold ring-1 ${gradeBadgeClass(g.value)}`}
-                  >
-                    {g.value}
-                  </span>
-                ))}
-              </div>
-            </button>
-          </li>
+              ))}
+            </div>
+          </button>
         );
       })}
-    </ul>
+    </div>
   );
 }
 
@@ -196,41 +359,66 @@ interface SandboxProps {
 }
 
 function Sandbox({ subject }: SandboxProps) {
+  const isPoints = subject.isPoints;
+
   // Deep-copy the official grades into local, editable sandbox state.
   const official = useMemo<SimGrade[]>(
-    () => subject.grades.map((g) => ({ ...g, simulated: false })),
+    () => subject.grades.map((g) => ({ ...g, simulated: false, hidden: false })),
     [subject],
   );
   const [grades, setGrades] = useState<SimGrade[]>(official);
 
-  // Form state for a new hypothetical grade.
+  // Form state for a new hypothetical grade. Classic uses grade + weight;
+  // points uses earned + max.
   const [newValue, setNewValue] = useState<string>("1");
   const [newWeight, setNewWeight] = useState<string>("20");
+  const [newEarned, setNewEarned] = useState<string>("");
+  const [newMax, setNewMax] = useState<string>("10");
   const [newLabel, setNewLabel] = useState<string>("");
 
   const officialAvg = subject.currentAverage;
-  const simulatedAvg = useMemo(() => weightedAverage(grades), [grades]);
-  const hasSimulated = grades.some((g) => g.simulated);
+  const simulatedAvg = useMemo(() => liveAverage(grades, isPoints), [grades, isPoints]);
+  const modified = grades.some((g) => g.simulated || g.hidden);
   const delta =
     officialAvg !== null && simulatedAvg !== null
       ? Math.round((simulatedAvg - officialAvg) * 100) / 100
       : null;
+  // Classic: lower is better. Points: higher is better.
+  const improved = delta !== null && delta !== 0 ? (isPoints ? delta > 0 : delta < 0) : null;
 
   function addHypo(e: React.FormEvent) {
     e.preventDefault();
-    const weight = Number(newWeight);
-    if (Number.isNaN(weight) || weight <= 0) return;
-    setGrades((prev) => [
-      {
+    let grade: SimGrade;
+    if (isPoints) {
+      const max = Number(newMax);
+      const earned = Number(newEarned);
+      if (Number.isNaN(max) || max <= 0 || Number.isNaN(earned) || earned < 0) return;
+      grade = {
+        id: `sim-${Date.now()}`,
+        value: String(earned),
+        weight: Math.round(max),
+        maxPoints: max,
+        description: newLabel.trim() || "Hypotetická známka",
+        date: null,
+        simulated: true,
+        hidden: false,
+      };
+      setNewEarned("");
+    } else {
+      const weight = Number(newWeight);
+      if (Number.isNaN(weight) || weight <= 0) return;
+      grade = {
         id: `sim-${Date.now()}`,
         value: newValue,
         weight,
-        description: newLabel.trim() || "Hypothetical grade",
+        maxPoints: null,
+        description: newLabel.trim() || "Hypotetická známka",
         date: null,
         simulated: true,
-      },
-      ...prev,
-    ]);
+        hidden: false,
+      };
+    }
+    setGrades((prev) => [grade, ...prev]);
     setNewLabel("");
   }
 
@@ -238,154 +426,398 @@ function Sandbox({ subject }: SandboxProps) {
     setGrades((prev) => prev.filter((g) => g.id !== id));
   }
 
+  function toggleHidden(id: string) {
+    setGrades((prev) => prev.map((g) => (g.id === id ? { ...g, hidden: !g.hidden } : g)));
+  }
+
   function reset() {
     setGrades(official);
   }
 
   return (
-    <section className="flex min-h-0 flex-col gap-5 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+    <section
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 20,
+        background: "#161208",
+        border: "1px solid rgba(176,141,87,0.14)",
+        borderRadius: 10,
+        padding: 20,
+      }}
+    >
       {/* Metric header: official vs simulated */}
-      <div className="flex flex-wrap items-stretch gap-4">
-        <div className="flex-1 rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Official average
-          </p>
-          <p className="mt-1 text-3xl font-bold text-white tabular-nums">
-            {formatAverage(officialAvg)}
-          </p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div style={{ background: "#100d08", border: "1px solid rgba(176,141,87,0.14)", borderRadius: 10, padding: "16px 18px" }}>
+          <div style={{ ...fieldLabel, marginBottom: 10 }}>Oficiálny priemer</div>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 32, fontWeight: 400, color: "#E8DCC7", lineHeight: 1, letterSpacing: "-0.02em" }}>
+            {formatAverage(officialAvg, isPoints)}
+          </div>
         </div>
-        <div className="flex-1 rounded-xl border border-violet-500/40 bg-violet-500/10 px-4 py-3">
-          <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-violet-300">
-            <FlaskConical className="size-3.5" aria-hidden />
-            Simulated average
-          </p>
-          <p className="mt-1 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-violet-200 tabular-nums">
-              {formatAverage(simulatedAvg)}
+        <div style={{ background: "rgba(176,141,87,0.1)", border: "1px solid rgba(176,141,87,0.3)", borderRadius: 10, padding: "16px 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+            <FlaskIcon />
+            <span style={{ ...fieldLabel, color: "#B08D57", marginBottom: 0 }}>Simulovaný priemer</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 32, fontWeight: 400, color: "#B08D57", lineHeight: 1, letterSpacing: "-0.02em" }}>
+              {formatAverage(simulatedAvg, isPoints)}
             </span>
             {delta !== null && delta !== 0 && (
               <span
-                className={`text-sm font-semibold tabular-nums ${
-                  // Lower is better on a 1–5 scale.
-                  delta < 0 ? "text-emerald-300" : "text-red-300"
-                }`}
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: improved ? "#88c8a0" : "#c88888",
+                }}
               >
                 {delta > 0 ? "+" : ""}
-                {delta.toFixed(2)}
+                {isPoints ? `${Math.round(delta)} %` : delta.toFixed(2)}
               </span>
             )}
-          </p>
+          </div>
         </div>
       </div>
 
-      {/* What-if form */}
+      {/* What-if form (adapts to the subject's grading system) */}
       <form
         onSubmit={addHypo}
-        className="grid gap-3 rounded-xl border border-slate-800 bg-slate-950/40 p-4 sm:grid-cols-[auto_auto_1fr_auto] sm:items-end"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto auto 1fr auto",
+          gap: 12,
+          alignItems: "end",
+          background: "#100d08",
+          border: "1px solid rgba(176,141,87,0.14)",
+          borderRadius: 10,
+          padding: 16,
+        }}
       >
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-slate-400">Grade</span>
-          <select
-            value={newValue}
-            onChange={(e) => setNewValue(e.target.value)}
-            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-          >
-            {GRADE_VALUES.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-slate-400">Weight</span>
-          <input
-            type="number"
-            min={1}
-            value={newWeight}
-            onChange={(e) => setNewWeight(e.target.value)}
-            className="w-24 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-slate-400">Label (optional)</span>
+        {isPoints ? (
+          <>
+            <label style={{ display: "block" }}>
+              <div style={fieldLabel}>Body</div>
+              <input
+                type="number"
+                min={0}
+                value={newEarned}
+                onChange={(e) => setNewEarned(e.target.value)}
+                placeholder="napr. 8"
+                style={{ width: 80, padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}
+              />
+            </label>
+            <label style={{ display: "block" }}>
+              <div style={fieldLabel}>Max</div>
+              <input
+                type="number"
+                min={1}
+                value={newMax}
+                onChange={(e) => setNewMax(e.target.value)}
+                style={{ width: 80, padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}
+              />
+            </label>
+          </>
+        ) : (
+          <>
+            <label style={{ display: "block" }}>
+              <div style={fieldLabel}>Známka</div>
+              <select
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+                style={{ width: 64, padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}
+              >
+                {["1", "2", "3", "4", "5", "A"].map((v) => (
+                  <option key={v} value={v}>
+                    {v === "A" ? "A (absencia)" : v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "block" }}>
+              <div style={fieldLabel}>Váha</div>
+              <input
+                type="number"
+                min={1}
+                value={newWeight}
+                onChange={(e) => setNewWeight(e.target.value)}
+                style={{ width: 80, padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}
+              />
+            </label>
+          </>
+        )}
+        <label style={{ display: "block" }}>
+          <div style={fieldLabel}>Popis (voliteľné)</div>
           <input
             type="text"
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
-            placeholder="e.g. Upcoming Final Test"
-            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-600 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            placeholder="napr. Veľká písomka"
+            style={{ width: "100%", padding: "9px 11px", fontFamily: "'Inter', sans-serif", fontSize: 13 }}
           />
         </label>
         <button
           type="submit"
-          className="flex h-[38px] cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-4 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#c0a06a")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "#B08D57")}
+          style={{
+            background: "#B08D57",
+            color: "#0a0805",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 9,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+            fontWeight: 500,
+            padding: "10px 14px",
+            borderRadius: 6,
+            border: "none",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            transition: "background 0.2s",
+          }}
         >
-          <Plus className="size-4" aria-hidden />
-          Add Hypo Grade
+          Pridať +
         </button>
       </form>
 
       {/* Grade list */}
-      <div className="min-h-0 flex-1">
-        <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-300">Grades</h3>
-          {hasSimulated && (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+            <span style={{ ...eyebrow, whiteSpace: "nowrap" }}>Známky</span>
+            <div style={{ flex: 1, height: 1, background: "rgba(176,141,87,0.1)" }} />
+          </div>
+          {modified && (
             <button
               type="button"
               onClick={reset}
-              className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-400 transition-colors duration-200 hover:border-slate-600 hover:text-slate-200"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "rgba(176,141,87,0.3)";
+                e.currentTarget.style.color = "rgba(232,220,199,0.7)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "rgba(176,141,87,0.14)";
+                e.currentTarget.style.color = "rgba(232,220,199,0.4)";
+              }}
+              style={{
+                marginLeft: 12,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "transparent",
+                border: "1px solid rgba(176,141,87,0.14)",
+                borderRadius: 6,
+                padding: "5px 10px",
+                cursor: "pointer",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 9,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: "rgba(232,220,199,0.4)",
+                transition: "border-color 0.15s, color 0.15s",
+                whiteSpace: "nowrap",
+              }}
             >
-              <RotateCcw className="size-3.5" aria-hidden />
-              Reset sandbox
+              <ResetIcon />
+              Vynulovať
             </button>
           )}
         </div>
-        <ul className="space-y-2">
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {grades.map((g) => (
-            <li
+            <GradeRow
               key={g.id}
-              className={[
-                "flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors",
-                g.simulated
-                  ? "border-dashed border-violet-500/60 bg-violet-500/5 shadow-[0_0_12px_-4px_rgb(139_92_246/0.6)]"
-                  : "border-slate-800 bg-slate-950/40",
-              ].join(" ")}
-            >
-              <span
-                className={`grid size-9 shrink-0 place-items-center rounded-md text-sm font-bold ring-1 ${gradeBadgeClass(g.value)}`}
-              >
-                {g.value}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="flex items-center gap-2 truncate text-sm font-medium text-slate-200">
-                  {g.description}
-                  {g.simulated && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-300">
-                      <Sparkles className="size-3" aria-hidden />
-                      Simulated
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs text-slate-500">
-                  weight {g.weight}
-                  {g.date ? ` · ${g.date}` : ""}
-                </p>
-              </div>
-              {g.simulated && (
-                <button
-                  type="button"
-                  onClick={() => removeGrade(g.id)}
-                  aria-label={`Remove ${g.description}`}
-                  className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-slate-500 transition-colors duration-200 hover:bg-red-500/10 hover:text-red-300"
-                >
-                  <Trash2 className="size-4" aria-hidden />
-                </button>
-              )}
-            </li>
+              grade={g}
+              onToggleHidden={() => toggleHidden(g.id)}
+              onRemove={() => removeGrade(g.id)}
+            />
           ))}
-        </ul>
+        </div>
       </div>
     </section>
+  );
+}
+
+// ── One row in the sandbox grade list ─────────────────────────────────────────
+
+function GradeRow({ grade, onToggleHidden, onRemove }: { grade: SimGrade; onToggleHidden: () => void; onRemove: () => void }) {
+  const meta = grade.maxPoints != null ? `${grade.value}/${grade.maxPoints} bodov` : `váha ${grade.weight}`;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "10px 12px",
+        borderRadius: 8,
+        background: grade.simulated ? "rgba(176,141,87,0.06)" : "#100d08",
+        border: grade.simulated ? "1px dashed rgba(176,141,87,0.4)" : "1px solid rgba(176,141,87,0.12)",
+        opacity: grade.hidden ? 0.55 : 1,
+      }}
+    >
+      <GradeBadge grade={grade} size="lg" dimmed={grade.hidden} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 13,
+              fontWeight: 500,
+              color: "#E8DCC7",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              textDecoration: grade.hidden ? "line-through" : undefined,
+            }}
+          >
+            {grade.description}
+          </span>
+          {grade.simulated && (
+            <span
+              style={{
+                flexShrink: 0,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 7,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: "#B08D57",
+                background: "rgba(176,141,87,0.14)",
+                borderRadius: 3,
+                padding: "2px 6px",
+              }}
+            >
+              Simulácia
+            </span>
+          )}
+          {grade.hidden && (
+            <span
+              style={{
+                flexShrink: 0,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 7,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: "rgba(232,220,199,0.4)",
+                background: "rgba(232,220,199,0.06)",
+                borderRadius: 3,
+                padding: "2px 6px",
+              }}
+            >
+              Skryté
+            </span>
+          )}
+        </div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: "rgba(232,220,199,0.3)", letterSpacing: "0.04em", marginTop: 3 }}>
+          {meta}
+          {grade.date ? ` · ${grade.date}` : ""}
+        </div>
+      </div>
+      {grade.simulated ? (
+        <IconButton label={`Odstrániť ${grade.description}`} onClick={onRemove} hoverColor="#c88888" hoverBg="rgba(90,40,40,0.18)">
+          <TrashIcon />
+        </IconButton>
+      ) : (
+        <IconButton
+          label={grade.hidden ? `Zobraziť ${grade.description}` : `Skryť ${grade.description}`}
+          onClick={onToggleHidden}
+          hoverColor="#B08D57"
+          hoverBg="rgba(176,141,87,0.12)"
+        >
+          {grade.hidden ? <EyeIcon /> : <EyeOffIcon />}
+        </IconButton>
+      )}
+    </div>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  hoverColor,
+  hoverBg,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  hoverColor: string;
+  hoverBg: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = hoverBg;
+        e.currentTarget.style.color = hoverColor;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = "rgba(232,220,199,0.35)";
+      }}
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: 30,
+        height: 30,
+        flexShrink: 0,
+        borderRadius: 6,
+        border: "none",
+        background: "transparent",
+        color: "rgba(232,220,199,0.35)",
+        cursor: "pointer",
+        transition: "background 0.15s, color 0.15s",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── Inline icons (stroke style consistent with the rest of the app) ───────────
+
+function FlaskIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+      <path d="M6 1.5h4M6.5 1.5v4L3 12a1.5 1.5 0 001.3 2.3h7.4A1.5 1.5 0 0013 12L9.5 5.5v-4" stroke="#B08D57" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 9.5h6" stroke="#B08D57" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ResetIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
+      <path d="M3 8a5 5 0 105-5 5 5 0 00-3.5 1.5L3 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3 3v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+      <path d="M3 4h10M6.5 4V2.8a.8.8 0 01.8-.8h1.4a.8.8 0 01.8.8V4M4.5 4l.5 8.2a1 1 0 001 .8h4a1 1 0 001-.8L11.5 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+      <path d="M6.5 4.2A6 6 0 018 4c3 0 5.3 2.2 6 4-.3.8-.9 1.7-1.7 2.4M9.5 11.8A6 6 0 018 12c-3 0-5.3-2.2-6-4 .4-1 1.2-2 2.3-2.8M6.6 6.6a2 2 0 102.8 2.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.5 2.5l11 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+      <path d="M2 8c.7-1.8 3-4 6-4s5.3 2.2 6 4c-.7 1.8-3 4-6 4s-5.3-2.2-6-4z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
   );
 }

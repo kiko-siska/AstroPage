@@ -44,22 +44,29 @@ def _closed_day(day: date) -> MealDay:
 
 async def test_bulk_signup_starts_tomorrow_and_orders_preferred(monkeypatch):
     tomorrow = date.today() + timedelta(days=1)
-    requested_days: list[date] = []
+    first_call_days: list[date] = []
     ordered: list[tuple[date, str]] = []
+    persisted: dict[date, str] = {}
+
+    # day 0 open & free → order; day 1 closed → skip;
+    # day 2 already ordered "B" → skip; day 3 open & free → order.
+    closed = {tomorrow + timedelta(days=1)}
+    preexisting = {tomorrow + timedelta(days=2): "B"}
 
     async def fake_meals(edupage, days):
-        requested_days.extend(days)
-        # day 0 open & free → order; day 1 closed → skip;
-        # day 2 already ordered → skip; day 3 open & free → order.
-        return [
-            _open_day(days[0]),
-            _closed_day(days[1]),
-            _open_day(days[2], "B"),
-            _open_day(days[3]),
-        ]
+        if not first_call_days:
+            first_call_days.extend(days)
+        out = []
+        for d in days:
+            if d in closed:
+                out.append(_closed_day(d))
+            else:
+                out.append(_open_day(d, persisted.get(d, preexisting.get(d))))
+        return out
 
-    async def fake_order(edupage, day, choice):
+    async def fake_order(edupage, day, choice, verify=True):
         ordered.append((day, choice))
+        persisted[day] = choice  # the order lands
         return choice
 
     monkeypatch.setattr(edupage_service, "fetch_meals", fake_meals)
@@ -67,17 +74,34 @@ async def test_bulk_signup_starts_tomorrow_and_orders_preferred(monkeypatch):
 
     updated, skipped = await bulk_signup(object(), days_count=4, preferred_choice="A")
 
-    assert requested_days[0] == tomorrow
-    assert updated == 2
-    assert skipped == 2
+    assert first_call_days[0] == tomorrow
+    assert updated == 2  # day 0 and day 3 confirmed as "A"
+    assert skipped == 2  # day 1 closed, day 2 already ordered
     assert ordered == [(tomorrow, "A"), (tomorrow + timedelta(days=3), "A")]
+
+
+async def test_bulk_signup_counts_only_orders_that_persist(monkeypatch):
+    # order_meal is fired (verify=False) but nothing ever shows up on the
+    # confirmation fetch → all candidates count as skipped, not updated.
+    async def fake_meals(edupage, days):
+        return [_open_day(d) for d in days]  # always open, never ordered
+
+    async def fake_order(edupage, day, choice, verify=True):
+        return choice  # claims success, but fake_meals never reflects it
+
+    monkeypatch.setattr(edupage_service, "fetch_meals", fake_meals)
+    monkeypatch.setattr(edupage_service, "order_meal", fake_order)
+
+    updated, skipped = await bulk_signup(object(), days_count=3, preferred_choice="A")
+
+    assert (updated, skipped) == (0, 3)
 
 
 async def test_bulk_signup_skips_day_missing_preferred_choice(monkeypatch):
     async def fake_meals(edupage, days):
         return [_open_day(days[0])]  # only offers A and B
 
-    async def fake_order(edupage, day, choice):  # pragma: no cover - must not run
+    async def fake_order(edupage, day, choice, verify=True):  # pragma: no cover - must not run
         raise AssertionError("order should not be called when choice is unavailable")
 
     monkeypatch.setattr(edupage_service, "fetch_meals", fake_meals)
@@ -88,11 +112,13 @@ async def test_bulk_signup_skips_day_missing_preferred_choice(monkeypatch):
     assert (updated, skipped) == (0, 1)
 
 
-async def test_bulk_signup_counts_order_rejection_as_skip(monkeypatch):
+async def test_bulk_signup_order_exception_does_not_abort(monkeypatch):
+    # A thrown order doesn't stop the run; the confirmation fetch decides the
+    # outcome (here the order didn't land → skipped).
     async def fake_meals(edupage, days):
-        return [_open_day(days[0])]
+        return [_open_day(d) for d in days]
 
-    async def fake_order(edupage, day, choice):
+    async def fake_order(edupage, day, choice, verify=True):
         raise EduPageDataError("order_failed", "Past the deadline.")
 
     monkeypatch.setattr(edupage_service, "fetch_meals", fake_meals)

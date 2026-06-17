@@ -73,6 +73,47 @@ async def test_average_none_when_no_numeric_grades(patch_fetch):
     assert await grades_service.list_grades(object()) == []
 
 
+async def test_points_grades_average_is_percentage(patch_fetch):
+    # Σ(earned) / Σ(max) × 100 = (10 + 5 + 3) / (10 + 10 + 12) = 18/32 = 56.25%
+    patch_fetch(
+        [
+            _grade(id="1", numeric_value=10.0, value="10", max_points=10.0),
+            _grade(id="2", numeric_value=5.0, value="5", max_points=10.0),
+            _grade(id="3", numeric_value=3.0, value="3", max_points=12.0),
+        ]
+    )
+    [subject] = await grades_service.list_grades(object())
+    assert subject.is_points is True
+    assert subject.current_average == 56.25
+
+
+async def test_points_grade_with_zero_max_adds_to_numerator_only(patch_fetch):
+    # A 1/0 grade contributes 1 to earned and 0 to max: (10 + 1) / (10 + 0) = 110%.
+    patch_fetch(
+        [
+            _grade(id="1", numeric_value=10.0, value="10", max_points=10.0),
+            _grade(id="2", numeric_value=1.0, value="1", max_points=0.0),
+        ]
+    )
+    [subject] = await grades_service.list_grades(object())
+    assert subject.is_points is True
+    assert subject.current_average == 110.0
+
+
+async def test_points_average_none_when_total_max_is_zero(patch_fetch):
+    # A lone 1/0 has nothing to divide by.
+    patch_fetch([_grade(id="1", numeric_value=1.0, value="1", max_points=0.0)])
+    [subject] = await grades_service.list_grades(object())
+    assert subject.is_points is True
+    assert subject.current_average is None
+
+
+async def test_classic_subject_is_not_points(patch_fetch):
+    patch_fetch([_grade(id="1", numeric_value=2.0, value="2", weight=20)])
+    [subject] = await grades_service.list_grades(object())
+    assert subject.is_points is False
+
+
 async def test_grades_sorted_recent_first(patch_fetch):
     patch_fetch(
         [

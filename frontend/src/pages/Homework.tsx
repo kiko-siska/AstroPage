@@ -6,6 +6,9 @@ import {
   type HomeworkStatus,
 } from "../data/mock";
 import { api, type HomeworkAttachment } from "../api/client";
+import { cachedFetch, peekCache, setCache } from "../api/cache";
+
+const HOMEWORK_CACHE_KEY = "homework";
 
 type StatusFilter = "all" | HomeworkStatus;
 
@@ -33,8 +36,10 @@ function fmtDue(iso: string): string {
 }
 
 export default function HomeworkPage() {
-  const [homework, setHomework] = useState<Homework[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Seed from cache so returning to this tab is instant (no spinner/refetch).
+  const cachedHomework = peekCache<Homework[]>(HOMEWORK_CACHE_KEY);
+  const [homework, setHomework] = useState<Homework[]>(cachedHomework ?? []);
+  const [loading, setLoading] = useState(cachedHomework === undefined);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -45,8 +50,7 @@ export default function HomeworkPage() {
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listHomework()
+    cachedFetch(HOMEWORK_CACHE_KEY, api.listHomework)
       .then((items) => { if (!cancelled) setHomework(items); })
       .catch((err: { detail?: string }) => { if (!cancelled) setError(err?.detail ?? "Nepodarilo sa načítať úlohy z EduPage."); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -84,7 +88,11 @@ export default function HomeworkPage() {
 
   async function toggleDone(hw: Homework, done: boolean) {
     const apply = (submitted: boolean) => {
-      setHomework((list) => list.map((h) => (h.id === hw.id ? { ...h, submitted } : h)));
+      setHomework((list) => {
+        const next = list.map((h) => (h.id === hw.id ? { ...h, submitted } : h));
+        setCache(HOMEWORK_CACHE_KEY, next); // keep the cached list in sync with the optimistic update
+        return next;
+      });
       setSelected((cur) => (cur?.id === hw.id ? { ...cur, submitted } : cur));
     };
     setTogglingDone((prev) => new Set(prev).add(hw.id));

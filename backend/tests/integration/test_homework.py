@@ -17,7 +17,7 @@ def test_list_requires_auth(client):
 
 
 def test_list_returns_assignments(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [
             HomeworkAssignment(
                 id="123",
@@ -88,7 +88,7 @@ def _hw(**kwargs) -> HomeworkAssignment:
 
 
 def test_list_exposes_has_attachments(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [_hw(has_attachments=True, superid="36216")]
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
@@ -106,7 +106,7 @@ def test_attachments_requires_auth(client):
 
 
 def test_attachments_returns_files(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [_hw(has_attachments=True, superid="36216")]
 
     async def fake_attachments(edupage, superid):
@@ -128,7 +128,7 @@ def test_attachments_returns_files(auth_client, monkeypatch):
 
 
 def test_attachments_empty_when_no_etest(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [_hw(has_attachments=False, superid=None)]
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
@@ -139,7 +139,7 @@ def test_attachments_empty_when_no_etest(auth_client, monkeypatch):
 
 
 def test_attachments_unknown_assignment_is_404(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return []
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
@@ -153,7 +153,7 @@ def test_mark_done_requires_auth(client):
 
 
 def test_mark_done_toggles_state(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [_hw(id="123", is_done=False, superid="36627")]
 
     calls: list = []
@@ -172,7 +172,7 @@ def test_mark_done_toggles_state(auth_client, monkeypatch):
 
 
 def test_mark_done_without_superid_is_404(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [_hw(id="123", superid=None)]
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
@@ -182,7 +182,7 @@ def test_mark_done_without_superid_is_404(auth_client, monkeypatch):
 
 
 def test_mark_done_unknown_assignment_is_404(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return []
 
     monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
@@ -192,7 +192,7 @@ def test_mark_done_unknown_assignment_is_404(auth_client, monkeypatch):
 
 
 def test_mark_done_edupage_refusal_is_502(auth_client, monkeypatch):
-    async def fake_homework(edupage):
+    async def fake_homework(edupage, since=None):
         return [_hw(id="123", superid="36627")]
 
     async def fake_set_done(edupage, superid, timelineid, done):

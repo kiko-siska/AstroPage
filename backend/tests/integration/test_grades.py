@@ -47,6 +47,42 @@ def test_grades_grouped_with_average(auth_client, monkeypatch):
     assert subject["grades"][1]["date"] == "2026-05-12"
 
 
+def test_points_subject_reports_percentage(auth_client, monkeypatch):
+    async def fake_grades(edupage):
+        return [
+            StudentGrade(
+                id="p1",
+                subject_name="Biology",
+                value="10",
+                numeric_value=10.0,
+                weight=20,
+                description="Lab Test",
+                date=date(2026, 5, 1),
+                max_points=10.0,
+            ),
+            StudentGrade(
+                id="p2",
+                subject_name="Biology",
+                value="5",
+                numeric_value=5.0,
+                weight=20,
+                description="Quiz",
+                date=date(2026, 5, 8),
+                max_points=10.0,
+            ),
+        ]
+
+    monkeypatch.setattr(edupage_service, "fetch_grades", fake_grades)
+
+    res = auth_client.get("/api/v1/grades")
+    assert res.status_code == 200
+    [subject] = res.json()["subjects"]
+    assert subject["is_points"] is True
+    # (10 + 5) / (10 + 10) × 100 = 75%
+    assert subject["current_average"] == 75.0
+    assert subject["grades"][0]["max_points"] == 10.0
+
+
 def test_grades_filters_verbal_entries(auth_client, monkeypatch):
     async def fake_grades(edupage):
         return [

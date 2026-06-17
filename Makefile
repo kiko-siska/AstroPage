@@ -1,4 +1,4 @@
-.PHONY: install dev dev-backend dev-frontend test lint format docker clean help
+.PHONY: install dev dev-backend dev-frontend stop test lint format docker docker-down clean help
 
 install:
 	cd backend && uv sync --extra dev
@@ -25,8 +25,15 @@ lint:
 format:
 	cd backend && uv run ruff format .
 
+stop:
+	@pkill -f "uvicorn app.main:app" 2>/dev/null && echo "backend stopped" || echo "backend not running"
+	@pkill -f "vite" 2>/dev/null && echo "frontend stopped" || echo "frontend not running"
+
 docker:
 	docker compose up --build
+
+docker-down:
+	docker compose down
 
 clean:
 	find backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; \
@@ -43,5 +50,7 @@ help:
 	@echo "  test          Run backend test suite"
 	@echo "  lint          Lint backend (ruff) and frontend (eslint)"
 	@echo "  format        Format backend with ruff"
+	@echo "  stop          Kill local dev backend and frontend processes"
 	@echo "  docker        Build and run full stack with Docker Compose"
+	@echo "  docker-down   Stop Docker Compose stack"
 	@echo "  clean         Remove build artifacts"

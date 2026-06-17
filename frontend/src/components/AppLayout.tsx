@@ -1,7 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { Home, BookOpen, GraduationCap, UtensilsCrossed, UserCog, LogOut, Rocket } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 
 
 const COPPER = "#B08D57";
@@ -9,13 +7,6 @@ const COPPER_DIM = "rgba(176,141,87,0.12)";
 const MUTED = "rgba(232,220,199,0.52)";
 const ACTIVE_SHADOW = "inset 2px 0 0 #B08D57";
 
-
-const NAV_ITEMS: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
-  { to: "/", label: "Home", icon: Home, end: true },
-  { to: "/homework", label: "Homework", icon: BookOpen },
-  { to: "/grades", label: "Grades", icon: GraduationCap },
-  { to: "/canteen", label: "Canteen", icon: UtensilsCrossed },
-];
 
 const itemBase: React.CSSProperties = {
   display: "flex",
@@ -194,6 +185,26 @@ export default function AppLayout() {
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <rect x="2" y="1" width="12" height="14" rx="1.5" stroke={c} strokeWidth="1.3" />
                 <path d="M5 5h6M5 8h6M5 11h4" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
+              </svg>
+            )}
+          />
+          <NavItem
+            to="/timetable"
+            label="Rozvrh"
+            icon={(c) => (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                <rect x="2" y="3" width="12" height="11" rx="1.5" stroke={c} strokeWidth="1.3" />
+                <path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
+              </svg>
+            )}
+          />
+          <NavItem
+            to="/grades"
+            label="Známky"
+            icon={(c) => (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                <path d="M8 2L1 5.5l7 3.5 7-3.5L8 2z" stroke={c} strokeWidth="1.3" strokeLinejoin="round" />
+                <path d="M4 7.2v3.3c0 .8 1.8 1.8 4 1.8s4-1 4-1.8V7.2M14 6v3.5" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             )}
           />

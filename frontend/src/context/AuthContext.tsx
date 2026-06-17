@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api, type LoginPayload } from "../api/client";
+import { clearCache } from "../api/cache";
 
 interface AuthUser {
   username: string;
@@ -27,6 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await api.logout();
+    clearCache();
     setUser(null);
   }, []);
 

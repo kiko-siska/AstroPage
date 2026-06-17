@@ -1,6 +1,6 @@
 """Canteen meals + order endpoints — hermetic."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from app.services import edupage_service
 from app.services.edupage_service import EduPageDataError, MealDay, MealMenu
@@ -83,16 +83,28 @@ def test_bulk_signup_requires_auth(client):
 
 
 def test_bulk_signup_returns_summary(auth_client, monkeypatch):
-    async def fake_meals(edupage, days):
-        return [
-            MealDay(days[0], True, "Lunch", [MealMenu("A", "Schnitzel", None, None)], None, None),
-            MealDay(days[1], False, None, [], None, None),
-        ]
-
+    tomorrow = date.today() + timedelta(days=1)
+    closed = {tomorrow + timedelta(days=1)}  # second day is closed
+    persisted: dict = {}
     ordered: list = []
 
-    async def fake_order(edupage, day, choice):
+    async def fake_meals(edupage, days):
+        out = []
+        for d in days:
+            if d in closed:
+                out.append(MealDay(d, False, None, [], None, None))
+            else:
+                out.append(
+                    MealDay(
+                        d, True, "Lunch", [MealMenu("A", "Schnitzel", None, None)],
+                        persisted.get(d), None,
+                    )
+                )
+        return out
+
+    async def fake_order(edupage, day, choice, verify=True):
         ordered.append((day, choice))
+        persisted[day] = choice  # the order lands
         return choice
 
     monkeypatch.setattr(edupage_service, "fetch_meals", fake_meals)

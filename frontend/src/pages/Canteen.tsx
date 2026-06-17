@@ -121,10 +121,19 @@ export default function CanteenPage() {
     try {
       const res = await api.bulkSignup(bulkDays, bulkChoice);
       await loadMeals();
-      setToast({
-        tone: "success",
-        message: `Naplánovaných ${res.updated_days} dní pre Menu ${bulkChoice}${res.skipped_days ? ` · ${res.skipped_days} preskočených` : ""}.`,
-      });
+      if (res.updated_days === 0) {
+        // Nothing actually landed on EduPage — usually every day was already
+        // ordered, closed, or past its ordering window. Don't fake success.
+        setToast({
+          tone: "error",
+          message: `Žiadny deň sa nepodarilo objednať${res.skipped_days ? ` · ${res.skipped_days} preskočených (už objednané alebo mimo okna)` : ""}.`,
+        });
+      } else {
+        setToast({
+          tone: "success",
+          message: `Naplánovaných ${res.updated_days} dní pre Menu ${bulkChoice}${res.skipped_days ? ` · ${res.skipped_days} preskočených` : ""}.`,
+        });
+      }
     } catch (err) {
       setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? "Auto-plánovanie zlyhalo." });
     } finally {
@@ -355,17 +364,42 @@ function DayCard({
         <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: "#E8DCC7", fontWeight: 400, marginBottom: 6 }}>
           {dateStr}
         </div>
-        <div
-          style={{
-            padding: "3px 7px",
-            borderRadius: 3,
-            background: signedUp ? "rgba(50,90,60,0.15)" : "rgba(232,220,199,0.04)",
-            display: "inline-block",
-          }}
-        >
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7, letterSpacing: "0.1em", color: signedUp ? "#88c8a0" : "rgba(232,220,199,0.32)" }}>
-            {signedUp ? `Prihlásený — Menu ${day.ordered_meal}` : "Neprihlásený"}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+          <div
+            style={{
+              padding: "3px 7px",
+              borderRadius: 3,
+              background: signedUp ? "rgba(50,90,60,0.15)" : "rgba(232,220,199,0.04)",
+            }}
+          >
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7, letterSpacing: "0.1em", color: signedUp ? "#88c8a0" : "rgba(232,220,199,0.32)" }}>
+              {signedUp ? `Prihlásený — Menu ${day.ordered_meal}` : "Neprihlásený"}
+            </span>
+          </div>
+          {signedUp && day.open && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              disabled={isPending}
+              onMouseEnter={(e) => { if (!isPending) e.currentTarget.style.color = "#c88888"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(200,120,120,0.65)"; }}
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: "2px 4px",
+                cursor: isPending ? "wait" : "pointer",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 7,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "rgba(200,120,120,0.65)",
+                transition: "color 0.15s",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Odhlásiť ✕
+            </button>
+          )}
         </div>
       </div>
 

@@ -55,7 +55,9 @@ async def bulk_signup(edupage: Edupage, days_count: int, preferred_choice: str) 
     days = [start + timedelta(days=i) for i in range(days_count)]
     meal_days = await edupage_service.fetch_meals(edupage, days)
 
-    updated = 0
+    # Pick the days worth attempting: open, not already ordered, offering the
+    # preferred menu.
+    candidates: list[date] = []
     skipped = 0
     for meal_day in meal_days:
         already_ordered = meal_day.ordered_meal is not None
@@ -63,10 +65,24 @@ async def bulk_signup(edupage: Edupage, days_count: int, preferred_choice: str) 
         if not meal_day.open or already_ordered or not offers_choice:
             skipped += 1
             continue
+        candidates.append(meal_day.date)
+
+    if not candidates:
+        return 0, skipped
+
+    # Fire each order without an immediate per-day re-read — EduPage is slow to
+    # reflect a just-placed order, which makes tight-loop verification flaky.
+    for day in candidates:
         try:
-            await edupage_service.order_meal(edupage, meal_day.date, preferred_choice)
-            updated += 1
+            await edupage_service.order_meal(edupage, day, preferred_choice, verify=False)
         except EduPageDataError:
-            # Cut-off passed or EduPage refused this day — keep going.
-            skipped += 1
+            # Don't trust this either way — the single fresh fetch below is the
+            # source of truth for what actually landed.
+            pass
+
+    # Confirm once, against a fresh fetch, what actually persisted on EduPage.
+    confirmed = await edupage_service.fetch_meals(edupage, candidates)
+    ordered_by_date = {m.date: m.ordered_meal for m in confirmed}
+    updated = sum(1 for d in candidates if ordered_by_date.get(d) == preferred_choice)
+    skipped += len(candidates) - updated
     return updated, skipped

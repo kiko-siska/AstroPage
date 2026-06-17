@@ -22,4 +22,7 @@ class DashboardSummary(BaseModel):
     due_within_24h: int
     lessons_total: int
     lessons_cancelled: int
+    # False when EduPage's timetable couldn't be loaded (so an empty `schedule`
+    # means "couldn't load" rather than "no lessons today").
+    schedule_available: bool = True
     schedule: list[PeriodOut]

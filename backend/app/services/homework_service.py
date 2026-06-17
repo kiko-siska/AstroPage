@@ -1,6 +1,7 @@
 """Homework listing and AI draft orchestration."""
 
 import logging
+from datetime import date
 
 from edupage_api import Edupage
 from sqlalchemy import select
@@ -14,14 +15,27 @@ from app.services.edupage_service import EduPageDataError, HomeworkAssignment, H
 logger = logging.getLogger("app.homework")
 
 
+def _school_year_start(today: date | None = None) -> date:
+    """August 1st of the current academic year — the window we fetch homework
+    over so the list (and every id-resolver below) sees the whole year, not
+    just EduPage's last-couple-of-weeks notification cache."""
+    today = today or date.today()
+    year = today.year if today.month >= 8 else today.year - 1
+    return date(year, 8, 1)
+
+
+async def _fetch_assignments(edupage: Edupage) -> list[HomeworkAssignment]:
+    return await edupage_service.fetch_homework(edupage, since=_school_year_start())
+
+
 async def list_assignments(edupage: Edupage) -> list[HomeworkAssignment]:
-    return await edupage_service.fetch_homework(edupage)
+    return await _fetch_assignments(edupage)
 
 
 async def list_attachments(edupage: Edupage, assignment_id: str) -> list[HomeworkAttachment]:
     """Attachments for one assignment, resolved by id from the student's own
     timeline so a client-supplied `superid` is never trusted."""
-    assignments = await edupage_service.fetch_homework(edupage)
+    assignments = await _fetch_assignments(edupage)
     assignment = next((a for a in assignments if a.id == assignment_id), None)
     if assignment is None:
         raise EduPageDataError("not_found", "That assignment was not found on EduPage.")
@@ -34,7 +48,7 @@ async def set_done(edupage: Edupage, assignment_id: str, done: bool) -> None:
     """Mark an assignment done / not done. Resolves the assignment from the
     student's own timeline first (so a stale or forged id can't be toggled) and
     uses its `superid` — the form EduPage's homeworkFlag action requires."""
-    assignments = await edupage_service.fetch_homework(edupage)
+    assignments = await _fetch_assignments(edupage)
     assignment = next((a for a in assignments if a.id == assignment_id), None)
     if assignment is None:
         raise EduPageDataError("not_found", "That assignment was not found on EduPage.")
@@ -68,16 +82,33 @@ async def generate_draft(
         if cached is not None:
             return cached, True
 
-    assignments = await edupage_service.fetch_homework(edupage)
+    assignments = await _fetch_assignments(edupage)
     assignment = next((a for a in assignments if a.id == assignment_id), None)
     if assignment is None:
         raise EduPageDataError("not_found", "That assignment was not found on EduPage.")
+
+    # Download attachment files best-effort; skip any that fail or are absent.
+    file_parts: list[tuple[bytes, str]] = []
+    if assignment.has_attachments and assignment.superid:
+        try:
+            raw_attachments = await edupage_service.fetch_homework_attachments(
+                edupage, assignment.superid
+            )
+            for att in raw_attachments[:5]:  # cap to avoid oversized payloads
+                try:
+                    data, mime = await edupage_service.download_attachment(edupage, att.url)
+                    file_parts.append((data, mime))
+                except EduPageDataError:
+                    pass
+        except EduPageDataError:
+            pass
 
     markdown = await ai_service.generate_draft(
         subject=assignment.subject,
         title=assignment.title,
         description=assignment.description,
         custom_prompt=user.custom_ai_prompt,
+        attachments=file_parts,
     )
 
     draft = await get_cached_draft(db, user, assignment_id)

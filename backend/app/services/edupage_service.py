@@ -18,6 +18,7 @@ from edupage_api.exceptions import (
     BadCredentialsException,
     CaptchaException,
 )
+from edupage_api.people import EduStudent
 
 logger = logging.getLogger("app.edupage")
 
@@ -161,8 +162,58 @@ class TimetablePeriod:
     curriculum: str | None
 
 
+def _resolve_self_student(edupage: Edupage) -> EduStudent | None:
+    """Build an `EduStudent` for the logged-in user from their EduPage user id.
+
+    `get_user_id()` returns e.g. "Student12345"; `get_timetable` only reads
+    `target.person_id`, so a minimal student carrying just the parsed id is
+    enough to address the `currenttt.js` endpoint. Returns None for non-student
+    accounts (teacher/parent) whose user id has no numeric student part.
+    """
+    user_id = edupage.get_user_id() or ""
+    if not user_id.startswith("Student"):
+        return None
+    digits = "".join(c for c in user_id if c.isdigit())
+    if not digits:
+        return None
+    # Only person_id is used downstream; the rest are placeholders.
+    return EduStudent(
+        person_id=int(digits),
+        name="",
+        gender=None,
+        in_school_since=None,
+        class_id=0,
+        number_in_class=0,
+    )
+
+
+def _fetch_day_timetable(edupage: Edupage, day: date):
+    """Fetch one day's `Timetable`, trying the reliable endpoint first.
+
+    `get_my_timetable` reads the dashboard's per-day plan (`eb.php`/`gcall`),
+    which raises `MissingDataException` for any day EduPage didn't include in
+    that response — the cause of "some days load, others don't". The canonical
+    `currenttt.js` timetable endpoint (`get_timetable`) accepts an explicit date
+    and returns data far more consistently, so we prefer it and fall back to the
+    dashboard plan only if it's unavailable.
+    """
+    student = _resolve_self_student(edupage)
+    if student is not None:
+        try:
+            return edupage.get_timetable(student, day)
+        except Exception as exc:
+            # Don't fail the day yet — log the real reason and try the fallback.
+            logger.warning(
+                "currenttt timetable failed for %s, falling back to dashboard plan: %r",
+                day,
+                exc,
+                exc_info=True,
+            )
+    return edupage.get_my_timetable(day)
+
+
 def _timetable_blocking(edupage: Edupage, day: date) -> list[TimetablePeriod]:
-    timetable = edupage.get_my_timetable(day)
+    timetable = _fetch_day_timetable(edupage, day)
     periods: list[TimetablePeriod] = []
     for lesson in timetable.lessons if timetable else []:
         periods.append(
@@ -184,7 +235,9 @@ async def fetch_timetable(edupage: Edupage, day: date) -> list[TimetablePeriod]:
     try:
         return await asyncio.to_thread(_timetable_blocking, edupage, day)
     except Exception as exc:
-        logger.warning("timetable fetch failed: err=%s", type(exc).__name__)
+        # Log the full error + traceback so a failing day is diagnosable from the
+        # console (web/docker logs), not just reduced to an exception class name.
+        logger.warning("timetable fetch failed for %s: %r", day, exc, exc_info=True)
         raise EduPageDataError("timetable_failed", "Could not load the timetable from EduPage.")
 
 
@@ -224,12 +277,17 @@ def _parse_due_date(data: dict) -> datetime | None:
     return None
 
 
-def _homework_blocking(edupage: Edupage) -> list[HomeworkAssignment]:
+def _homework_blocking(edupage: Edupage, since: date | None = None) -> list[HomeworkAssignment]:
     from edupage_api.dbi import DbiHelper
     from edupage_api.timeline import EventType
 
+    # `get_notifications` only returns the small login-cached timeline window
+    # (~the last couple of weeks). For a fuller backlog, pull the history since
+    # `since` instead — EduPage's history endpoint reaches back months.
+    events = edupage.get_notification_history(since) if since else edupage.get_notifications()
+
     assignments: list[HomeworkAssignment] = []
-    for event in edupage.get_notifications():
+    for event in events:
         if event.event_type != EventType.HOMEWORK:
             continue
         data = event.additional_data or {}
@@ -270,9 +328,9 @@ def _homework_blocking(edupage: Edupage) -> list[HomeworkAssignment]:
     return assignments
 
 
-async def fetch_homework(edupage: Edupage) -> list[HomeworkAssignment]:
+async def fetch_homework(edupage: Edupage, since: date | None = None) -> list[HomeworkAssignment]:
     try:
-        return await asyncio.to_thread(_homework_blocking, edupage)
+        return await asyncio.to_thread(_homework_blocking, edupage, since)
     except Exception as exc:
         logger.warning("homework fetch failed: err=%s", type(exc).__name__)
         raise EduPageDataError("homework_failed", "Could not load homework from EduPage.")
@@ -361,6 +419,23 @@ async def fetch_homework_attachments(edupage: Edupage, superid: str) -> list[Hom
         )
 
 
+def _download_attachment_blocking(edupage: Edupage, url: str) -> tuple[bytes, str]:
+    resp = edupage.session.get(url, timeout=30)
+    resp.raise_for_status()
+    mime = resp.headers.get("content-type", "application/octet-stream").split(";")[0].strip()
+    return resp.content, mime
+
+
+async def download_attachment(edupage: Edupage, url: str) -> tuple[bytes, str]:
+    """Download a homework attachment and return (bytes, mime_type).
+    Raises EduPageDataError on failure."""
+    try:
+        return await asyncio.to_thread(_download_attachment_blocking, edupage, url)
+    except Exception as exc:
+        logger.warning("attachment download failed: url=%s err=%s", url, type(exc).__name__)
+        raise EduPageDataError("attachment_failed", "Could not download attachment.")
+
+
 # ── Homework done state ───────────────────────────────────────────────────────
 
 
@@ -422,14 +497,20 @@ async def set_homework_done(edupage: Edupage, superid: str, timelineid: str, don
 class StudentGrade:
     id: str
     subject_name: str
-    # Display value as shown on EduPage (e.g. "1"); verbal grades keep their text.
+    # Display value as shown on EduPage. For classic grades this is "1".."5";
+    # for points grades it's the earned points (e.g. "10"), paired with
+    # max_points below so the client can render "10/10".
     value: str
     # Numeric grade for averaging, or None for verbal / non-numeric entries.
+    # For points grades this holds the earned points.
     numeric_value: float | None
     # EduPage weight points (importance * 20); 20 == a normal-weight grade.
     weight: int
     description: str
     date: date | None
+    # Max points for a points/percentage grade (e.g. 10 for "5/10"); None for
+    # classic 1–5 grades. Its presence is what marks a grade as points-based.
+    max_points: float | None = None
 
 
 def _format_grade_value(grade_n: object) -> str:
@@ -451,21 +532,35 @@ def _grades_blocking(edupage: Edupage) -> list[StudentGrade]:
         importance = grade.importance if grade.importance is not None else 1.0
         weight = round(importance * 20)
 
-        numeric: float | None
-        if not grade.verbal and isinstance(grade.grade_n, (int, float)):
-            numeric = float(grade.grade_n)
-        else:
-            numeric = None
+        display = _format_grade_value(grade.grade_n)
+        numeric: float | None = None
+        if not grade.verbal:
+            if isinstance(grade.grade_n, (int, float)):
+                numeric = float(grade.grade_n)
+            else:
+                # EduPage leaves partial/decimal grades like "14.75" as strings
+                # (str.isdigit() rejects the dot), which would otherwise be
+                # dropped. Parse them so e.g. 14.75/15 is counted.
+                try:
+                    numeric = float(str(grade.grade_n).replace(",", "."))
+                except (TypeError, ValueError):
+                    numeric = None
+        if numeric is None and display.strip().upper() == "A":
+            # EduPage's "absent" mark, counted (not dropped) so it drags the
+            # average down until the test is made up: 0 earned points in a
+            # points subject, or a 5 on the classic 1–5 scale.
+            numeric = 0.0 if grade.max_points is not None else 5.0
 
         grades.append(
             StudentGrade(
                 id=str(grade.event_id),
                 subject_name=grade.subject_name,
-                value=_format_grade_value(grade.grade_n),
+                value=display,
                 numeric_value=numeric,
                 weight=weight,
                 description=grade.title or grade.comment or "Grade",
                 date=grade.date.date() if grade.date else None,
+                max_points=grade.max_points,
             )
         )
     return grades
@@ -546,28 +641,50 @@ async def fetch_meals(edupage: Edupage, days: list[date]) -> list[MealDay]:
         raise EduPageDataError("meals_failed", "Could not load canteen menus from EduPage.")
 
 
-def _order_blocking(edupage: Edupage, day: date, choice: str | None) -> str | None:
+def _fetch_lunch(edupage: Edupage, day: date) -> object | None:
     meals = edupage.get_meals(day)
-    lunch = meals.lunch if meals else None
+    return meals.lunch if meals else None
+
+
+def _order_blocking(edupage: Edupage, day: date, choice: str | None, verify: bool = True) -> str | None:
+    lunch = _fetch_lunch(edupage, day)
     if lunch is None:
         raise EduPageDataError("no_meal", "There is no orderable meal on that day.")
     if choice is None:
         lunch.sign_off(edupage)
-        return None
-    number = ord(choice) - ord("A") + 1
-    if number < 1 or number > max(1, lunch.amount_of_foods):
-        raise EduPageDataError("bad_choice", f"Menu option {choice} does not exist on that day.")
-    lunch.choose(edupage, number)
-    return lunch.ordered_meal
+    else:
+        number = ord(choice) - ord("A") + 1
+        if number < 1 or number > max(1, lunch.amount_of_foods or 0):
+            raise EduPageDataError("bad_choice", f"Menu option {choice} does not exist on that day.")
+        lunch.choose(edupage, number)
+
+    # edupage-api sets `ordered_meal` optimistically and only raises on a hard
+    # server error, so an order EduPage silently ignores would otherwise look
+    # like success. For a single order we re-read the day and confirm. Bulk
+    # passes verify=False and confirms once at the end instead — an immediate
+    # re-read inside a tight loop is flaky (EduPage lags reflecting the change).
+    if not verify:
+        return choice
+    confirmed = _fetch_lunch(edupage, day)
+    persisted = confirmed.ordered_meal if confirmed else None
+    if persisted != choice:
+        raise EduPageDataError(
+            "order_not_persisted",
+            "EduPage did not record the meal change — the ordering window for that day may be closed.",
+        )
+    return persisted
 
 
-async def order_meal(edupage: Edupage, day: date, choice: str | None) -> str | None:
+async def order_meal(
+    edupage: Edupage, day: date, choice: str | None, verify: bool = True
+) -> str | None:
     """Order menu `choice` ("A", "B", …) for `day`, or sign off when None.
 
-    Returns the resulting ordered meal letter (None after sign-off).
+    Returns the resulting ordered meal letter (None after sign-off). With
+    `verify=False` the post-write confirmation is skipped (the caller verifies).
     """
     try:
-        return await asyncio.to_thread(_order_blocking, edupage, day, choice)
+        return await asyncio.to_thread(_order_blocking, edupage, day, choice, verify)
     except EduPageDataError:
         raise
     except Exception as exc:
