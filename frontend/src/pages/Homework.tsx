@@ -218,7 +218,7 @@ export default function HomeworkPage() {
       {error ? (
         <ErrorPanel message={error} />
       ) : loading ? (
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
           {Array.from({ length: 4 }, (_, i) => (
             <div
               key={i}
@@ -255,7 +255,7 @@ export default function HomeworkPage() {
           </p>
         </div>
       ) : (
-        <ul style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, listStyle: "none", padding: 0, margin: 0 }}>
+        <ul style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, listStyle: "none", padding: 0, margin: 0 }}>
           {visible.map((hw) => {
             const st = STATUS_STYLES[getHomeworkStatus(hw)];
             return (

@@ -230,11 +230,19 @@ export default function CanteenPage() {
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>{t("common.retryOrLogin")}</p>
         </div>
       ) : loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} style={{ height: 120, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
-          ))}
-        </div>
+        isMobile ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} style={{ height: 120, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} style={{ height: 288, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+            ))}
+          </div>
+        )
       ) : !week ? (
         <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
           <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(232,220,199,0.28)", margin: 0 }}>
@@ -272,17 +280,20 @@ export default function CanteenPage() {
             })}
           </div>
 
-          {/* Day rows */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {week.days.map((day) => (
-              <DayCard
-                key={day.date}
-                day={day}
-                isPending={pending.has(day.date)}
-                onChange={(choice) => changeMeal(day.date, choice)}
-              />
-            ))}
-          </div>
+          {/* Day layout: rows on mobile, 5-column grid on desktop */}
+          {isMobile ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {week.days.map((day) => (
+                <DayCard key={day.date} day={day} isPending={pending.has(day.date)} onChange={(choice) => changeMeal(day.date, choice)} />
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+              {week.days.map((day) => (
+                <DayCard key={day.date} day={day} isPending={pending.has(day.date)} onChange={(choice) => changeMeal(day.date, choice)} />
+              ))}
+            </div>
+          )}
         </>
       )}
 
@@ -341,7 +352,6 @@ function DayCard({
   onChange: (choice: string | null) => void;
 }) {
   const { t, locale } = useT();
-  const isMobile = useIsMobile();
   const d = parseDay(day.date);
   const dayName = d.toLocaleDateString(locale, { weekday: "long" }).toUpperCase();
   const dateStr = `${d.getDate()}.${d.getMonth() + 1}.`;
@@ -354,33 +364,17 @@ function DayCard({
         border: "1px solid rgba(176,141,87,0.14)",
         borderRadius: 10,
         overflow: "hidden",
-        display: "flex",
-        flexDirection: isMobile ? "column" : "row",
       }}
     >
-      {/* Day info panel */}
-      <div
-        style={{
-          padding: "14px 16px",
-          borderBottom: isMobile ? "1px solid rgba(176,141,87,0.1)" : "none",
-          borderRight: isMobile ? "none" : "1px solid rgba(176,141,87,0.1)",
-          width: isMobile ? "auto" : 156,
-          flexShrink: 0,
-          display: "flex",
-          flexDirection: isMobile ? "row" : "column",
-          alignItems: isMobile ? "center" : "flex-start",
-          gap: isMobile ? 10 : 4,
-        }}
-      >
-        <div>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.4)", marginBottom: 2 }}>
-            {dayName}
-          </div>
-          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: "#E8DCC7", fontWeight: 400 }}>
-            {dateStr}
-          </div>
+      {/* Card header */}
+      <div style={{ padding: "12px 12px 10px", borderBottom: "1px solid rgba(176,141,87,0.1)" }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.4)", marginBottom: 2 }}>
+          {dayName}
         </div>
-        <div style={{ marginLeft: isMobile ? "auto" : 0, marginTop: isMobile ? 0 : 8, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: "#E8DCC7", fontWeight: 400, marginBottom: 6 }}>
+          {dateStr}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
           <div
             style={{
               padding: "3px 7px",
@@ -402,7 +396,7 @@ function DayCard({
               style={{
                 background: "transparent",
                 border: "none",
-                padding: "2px 0",
+                padding: "2px 4px",
                 cursor: isPending ? "wait" : "pointer",
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 7,
@@ -419,21 +413,21 @@ function DayCard({
         </div>
       </div>
 
-      {/* Meals panel */}
+      {/* Body */}
       {!day.open ? (
-        <div style={{ flex: 1, display: "grid", placeItems: "center", padding: "18px 12px" }}>
+        <div style={{ padding: "18px 12px", textAlign: "center" }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.18)" }}>
             {t("canteen.closed")}
           </div>
         </div>
       ) : day.options.length === 0 ? (
-        <div style={{ flex: 1, display: "grid", placeItems: "center", padding: "18px 12px" }}>
+        <div style={{ padding: "18px 12px", textAlign: "center" }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.18)" }}>
             {t("canteen.menuNotPublished")}
           </div>
         </div>
       ) : (
-        <div style={{ flex: 1, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
           {day.options.map((opt) => (
             <MealOption
               key={opt.letter}

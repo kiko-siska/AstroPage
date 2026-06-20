@@ -139,10 +139,17 @@ export default function GradesPage() {
       errorFallback: t("grades.loadError"),
     });
   const subjects = useMemo(() => data ?? [], [data]);
-  const [expandedSubject, setExpandedSubject] = useState<string | null>(null);
+  // shared state: on desktop = selected subject; on mobile = toggled open subject
+  const [picked, setPicked] = useState<string | null>(null);
+  const desktopSelected = picked ?? subjects[0]?.subjectName ?? null;
 
-  function toggleSubject(name: string) {
-    setExpandedSubject((prev) => (prev === name ? null : name));
+  const desktopSubject = useMemo(
+    () => subjects.find((s) => s.subjectName === desktopSelected) ?? null,
+    [subjects, desktopSelected],
+  );
+
+  function toggleMobile(name: string) {
+    setPicked((prev) => (prev === name ? null : name));
   }
 
   return (
@@ -183,14 +190,22 @@ export default function GradesPage() {
           </p>
         </div>
       ) : loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {Array.from({ length: 5 }, (_, i) => (
-            <div
-              key={i}
-              style={{ height: 92, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }}
-            />
-          ))}
-        </div>
+        isMobile ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} style={{ height: 92, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {Array.from({ length: 5 }, (_, i) => (
+                <div key={i} style={{ height: 92, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+              ))}
+            </div>
+            <div style={{ height: 420, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+          </div>
+        )
       ) : subjects.length === 0 ? (
         <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
           <p style={{ ...eyebrow, color: "rgba(232,220,199,0.28)", margin: 0 }}>{t("grades.noGrades")}</p>
@@ -198,26 +213,41 @@ export default function GradesPage() {
             {t("grades.noGradesHint")}
           </p>
         </div>
-      ) : (
+      ) : isMobile ? (
+        /* ── Mobile: accordion ── */
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label={t("grades.subjects")}>
           {subjects.map((subject) => {
-            const isOpen = expandedSubject === subject.subjectName;
+            const isOpen = picked === subject.subjectName;
             return (
               <div key={subject.subjectName}>
-                <SubjectAccordionHeader
-                  subject={subject}
-                  isOpen={isOpen}
-                  onToggle={() => toggleSubject(subject.subjectName)}
-                  t={t}
-                />
-                {isOpen && (
-                  <div style={{ marginTop: 10, paddingLeft: isMobile ? 0 : 2 }}>
-                    <Sandbox key={subject.subjectName} subject={subject} />
-                  </div>
-                )}
+                <SubjectAccordionHeader subject={subject} isOpen={isOpen} onToggle={() => toggleMobile(subject.subjectName)} t={t} />
+                {isOpen && <Sandbox key={subject.subjectName} subject={subject} accordionMode />}
               </div>
             );
           })}
+        </div>
+      ) : (
+        /* ── Desktop: two-pane ── */
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20, alignItems: "start" }}>
+          <ReportCard subjects={subjects} selected={desktopSelected} onSelect={setPicked} />
+          {desktopSubject ? (
+            <Sandbox key={desktopSubject.subjectName} subject={desktopSubject} accordionMode={false} />
+          ) : (
+            <div
+              style={{
+                display: "grid",
+                placeItems: "center",
+                border: "1px dashed rgba(176,141,87,0.18)",
+                borderRadius: 10,
+                minHeight: 320,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 12,
+                color: "rgba(232,220,199,0.3)",
+              }}
+            >
+              {t("grades.selectSubject")}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -340,13 +370,63 @@ function GradeBadge({ grade, size = "sm", dimmed = false }: { grade: Pick<Grade,
   );
 }
 
+// ── Desktop two-pane: subject list ───────────────────────────────────────────
+
+function ReportCard({ subjects, selected, onSelect }: { subjects: SubjectGrades[]; selected: string | null; onSelect: (name: string) => void }) {
+  const { t } = useT();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label={t("grades.subjects")}>
+      {subjects.map((subject) => {
+        const isActive = subject.subjectName === selected;
+        return (
+          <button
+            key={subject.subjectName}
+            type="button"
+            onClick={() => onSelect(subject.subjectName)}
+            aria-pressed={isActive}
+            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.borderColor = "rgba(176,141,87,0.3)"; }}
+            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.borderColor = "rgba(176,141,87,0.14)"; }}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              cursor: "pointer",
+              background: isActive ? "rgba(176,141,87,0.12)" : "#161208",
+              border: `1px solid ${isActive ? "rgba(176,141,87,0.3)" : "rgba(176,141,87,0.14)"}`,
+              borderRadius: 10,
+              padding: 16,
+              transition: "border-color 0.15s, background 0.15s",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 500, color: "#E8DCC7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {subject.subjectName}
+              </span>
+              <span style={{ flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 500, color: isActive ? "#B08D57" : "rgba(176,141,87,0.75)", background: "rgba(176,141,87,0.08)", borderRadius: 5, padding: "3px 8px" }}>
+                {subject.isPoints ? "" : "Ø "}{formatAverage(subject.currentAverage, subject.isPoints)}
+              </span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 12 }}>
+              {subject.grades.map((g) => (
+                <span key={g.id} title={`${g.description}${g.maxPoints != null ? "" : ` · ${t("grades.weightMeta", { n: g.weight })}`}`}>
+                  <GradeBadge grade={g} />
+                </span>
+              ))}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Sandbox simulator ─────────────────────────────────────────────────────────
 
 interface SandboxProps {
   subject: SubjectGrades;
+  accordionMode?: boolean;
 }
 
-function Sandbox({ subject }: SandboxProps) {
+function Sandbox({ subject, accordionMode = false }: SandboxProps) {
   const { t } = useT();
   const isMobile = useIsMobile();
   const isPoints = subject.isPoints;
@@ -431,9 +511,9 @@ function Sandbox({ subject }: SandboxProps) {
         flexDirection: "column",
         gap: 20,
         background: "#161208",
-        border: "1px solid rgba(176,141,87,0.3)",
-        borderTop: "none",
-        borderRadius: "0 0 10px 10px",
+        border: accordionMode ? "1px solid rgba(176,141,87,0.3)" : "1px solid rgba(176,141,87,0.14)",
+        borderTop: accordionMode ? "none" : undefined,
+        borderRadius: accordionMode ? "0 0 10px 10px" : 10,
         padding: 20,
       }}
     >
