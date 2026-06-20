@@ -237,7 +237,9 @@ def test_absent_mark_counts_as_five():
 def test_absent_mark_in_points_subject_counts_as_zero():
     # "A/20": absent in a points subject → 0 earned (not 5, which would corrupt
     # the percentage). Keeps the simulated average in step with the official one.
-    edupage = SimpleNamespace(get_grades=lambda: [_fake_edu_grade("A", verbal=True, max_points=20.0)])
+    edupage = SimpleNamespace(
+        get_grades=lambda: [_fake_edu_grade("A", verbal=True, max_points=20.0)]
+    )
     [grade] = _grades_blocking(edupage)
     assert grade.value == "A"
     assert grade.max_points == 20.0

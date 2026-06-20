@@ -98,8 +98,12 @@ def test_bulk_signup_returns_summary(auth_client, monkeypatch):
             else:
                 out.append(
                     MealDay(
-                        d, True, "Lunch", [MealMenu("A", "Schnitzel", None, None)],
-                        persisted.get(d), None,
+                        d,
+                        True,
+                        "Lunch",
+                        [MealMenu("A", "Schnitzel", None, None)],
+                        persisted.get(d),
+                        None,
                     )
                 )
         return out
