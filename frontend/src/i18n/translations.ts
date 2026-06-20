@@ -112,6 +112,7 @@ const en: Dict = {
   "homework.aiNothingSubmitted": "Nothing is submitted automatically.",
   "homework.aiButton": "Draft with AI",
   "homework.aiRetry": "Try again",
+  "homework.aiUnavailable": "AI assistant temporarily unavailable",
 
   // grades
   "grades.eyebrow": "Average · Simulation",
@@ -292,6 +293,7 @@ const sk: Dict = {
   "homework.aiNothingSubmitted": "Nič sa neodovzdáva automaticky.",
   "homework.aiButton": "Navrhnúť pomocou AI",
   "homework.aiRetry": "Skúsiť znova",
+  "homework.aiUnavailable": "AI asistent je dočasne nedostupný",
 
   "grades.eyebrow": "Priemer · Simulácia",
   "grades.title": "Známky",
