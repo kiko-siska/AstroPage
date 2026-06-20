@@ -1,9 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useT } from "../i18n/LanguageContext";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 import type { ApiError } from "../api/client";
 
 export default function Login() {
   const { login } = useAuth();
+  const { t } = useT();
   const [subdomain, setSubdomain] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -19,9 +22,9 @@ export default function Login() {
     } catch (err) {
       const apiErr = err as ApiError;
       if (apiErr.status === 429) {
-        setError("Príliš veľa pokusov, skúste za minútu.");
+        setError(t("login.tooManyAttempts"));
       } else {
-        setError(apiErr.detail ?? "Prihlásenie zlyhalo. Skúste znova.");
+        setError(apiErr.detail ?? t("login.failed"));
       }
     } finally {
       setSubmitting(false);
@@ -86,7 +89,7 @@ export default function Login() {
               marginBottom: 10,
             }}
           >
-            EduPage · Prihlásiť sa
+            EduPage · {t("login.eyebrow")}
           </div>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
             <div style={{ width: 1, height: 16, background: "rgba(176,141,87,0.5)" }} />
@@ -110,21 +113,21 @@ export default function Login() {
 
         <form onSubmit={handleSubmit}>
           <Field
-            label="Škola"
+            label={t("login.school")}
             value={subdomain}
             onChange={setSubdomain}
             placeholder="spsezochova"
             autoComplete="organization"
           />
           <Field
-            label="Meno"
+            label={t("login.username")}
             value={username}
             onChange={setUsername}
             placeholder="janko.hrasko"
             autoComplete="username"
           />
           <Field
-            label="Heslo"
+            label={t("login.password")}
             type="password"
             value={password}
             onChange={setPassword}
@@ -171,7 +174,7 @@ export default function Login() {
               transition: "background 0.2s",
             }}
           >
-            {submitting ? "Prihlasovanie…" : "Prihlásiť sa →"}
+            {submitting ? t("login.submitting") : t("login.submit")}
           </button>
         </form>
 
@@ -185,7 +188,11 @@ export default function Login() {
             textAlign: "center",
           }}
         >
-          We never store your EduPage password.
+          {t("settings.passwordNever")}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
+          <LanguageSwitcher />
         </div>
       </div>
     </div>

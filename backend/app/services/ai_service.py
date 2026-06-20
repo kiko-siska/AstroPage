@@ -14,7 +14,7 @@ from app.core.config import settings
 
 logger = logging.getLogger("app.ai")
 
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 MAX_OUTPUT_TOKENS = 8192
 # Inline data limit for Gemini; files larger than this are skipped.
 _MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB

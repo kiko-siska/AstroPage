@@ -6,9 +6,9 @@ from datetime import date, timedelta
 from edupage_api import Edupage
 
 from app.schemas.dashboard import PeriodOut
-from app.schemas.timetable import TimetableDayOut, TimetableWeekOut
+from app.schemas.timetable import TimetableChangeOut, TimetableDayOut, TimetableWeekOut
 from app.services import edupage_service
-from app.services.edupage_service import EduPageDataError, TimetablePeriod
+from app.services.edupage_service import EduPageDataError, TimetableChange, TimetablePeriod
 
 logger = logging.getLogger("app.timetable")
 
@@ -28,6 +28,15 @@ def _to_periods_out(periods: list[TimetablePeriod]) -> list[PeriodOut]:
             curriculum=p.curriculum,
         )
         for p in periods
+    ]
+
+
+def _to_changes_out(changes: list[TimetableChange]) -> list[TimetableChangeOut]:
+    return [
+        TimetableChangeOut(
+            lesson=c.lesson, change_class=c.change_class, title=c.title, action=c.action
+        )
+        for c in changes
     ]
 
 
@@ -52,6 +61,18 @@ async def build_week(edupage: Edupage, week_offset: int = 0) -> TimetableWeekOut
             logger.warning("timetable unavailable for %s: %s", day, exc.message)
             periods = []
             available = False
-        days.append(TimetableDayOut(date=day, available=available, periods=_to_periods_out(periods)))
+
+        # Substitutions for the student's class. Self-degrading (returns []), so a
+        # change-scrape failure annotates nothing rather than breaking the day.
+        changes = await edupage_service.fetch_timetable_changes(edupage, day)
+
+        days.append(
+            TimetableDayOut(
+                date=day,
+                available=available,
+                periods=_to_periods_out(periods),
+                changes=_to_changes_out(changes),
+            )
+        )
 
     return TimetableWeekOut(week_start=monday, week_offset=week_offset, days=days)

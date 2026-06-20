@@ -13,7 +13,7 @@ interface Entry<T> {
   ts: number;
 }
 
-const DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
+export const DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
 
 const store = new Map<string, Entry<unknown>>();
 const inflight = new Map<string, Promise<unknown>>();
@@ -24,6 +24,12 @@ export function peekCache<T>(key: string, ttl = DEFAULT_TTL): T | undefined {
   const hit = store.get(key) as Entry<T> | undefined;
   if (hit && Date.now() - hit.ts < ttl) return hit.data;
   return undefined;
+}
+
+/** Timestamp (ms) the key was last written, or undefined if absent. Lets a
+ *  caller show "updated 2 min ago" and decide when data has gone stale. */
+export function cacheTimestamp(key: string): number | undefined {
+  return store.get(key)?.ts;
 }
 
 /** Return cached data when fresh, otherwise run `loader`, cache, and return it.

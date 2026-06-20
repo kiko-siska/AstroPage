@@ -274,6 +274,23 @@ function toTimetableWeek(dto: TimetableWeekDTO): TimetableWeek {
   };
 }
 
+// ── AI homework draft wire shapes ───────────────────────────────────────────
+
+interface DraftResponseDTO {
+  assignment_id: string;
+  draft: string;
+  cached: boolean;
+  created_at: string;
+}
+
+/** An AI-generated homework draft (Gemini, produced server-side). */
+export interface AiDraft {
+  assignmentId: string;
+  draft: string;
+  cached: boolean;
+  createdAt: string;
+}
+
 export interface OrderResponseDTO {
   date: string;
   ordered_meal: string | null;
@@ -306,6 +323,22 @@ export const api = {
       `/homework/${encodeURIComponent(id)}/done`,
       { method: "POST", body: JSON.stringify({ done }) },
     ),
+  // Ask the AI assistant (Gemini, backend-side) to draft this assignment. The
+  // backend pulls the assignment's attachment files and the student's custom
+  // prompt into the request; we only pass the id. `force` regenerates instead
+  // of returning a cached draft.
+  generateAiDraft: async (assignmentId: string, force = false): Promise<AiDraft> => {
+    const dto = await request<DraftResponseDTO>("/homework/generate-ai", {
+      method: "POST",
+      body: JSON.stringify({ assignment_id: assignmentId, force }),
+    });
+    return {
+      assignmentId: dto.assignment_id,
+      draft: dto.draft,
+      cached: dto.cached,
+      createdAt: dto.created_at,
+    };
+  },
   listGrades: async (): Promise<SubjectGrades[]> => {
     const body = await request<GradesResponseDTO>("/grades");
     return body.subjects.map(toSubjectGrades);

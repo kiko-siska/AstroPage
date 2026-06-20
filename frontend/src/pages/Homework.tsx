@@ -1,61 +1,59 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  buildAiDraft,
   getHomeworkStatus,
   type Homework,
   type HomeworkStatus,
 } from "../data/mock";
 import { api, type HomeworkAttachment } from "../api/client";
-import { cachedFetch, peekCache, setCache } from "../api/cache";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
 
 const HOMEWORK_CACHE_KEY = "homework";
 
 type StatusFilter = "all" | HomeworkStatus;
 
-const FILTERS: { id: StatusFilter; label: string }[] = [
-  { id: "all", label: "Všetky" },
-  { id: "due-soon", label: "Čoskoro" },
-  { id: "pending", label: "Pending" },
-  { id: "overdue", label: "Oneskorené" },
-  { id: "done", label: "Hotové" },
+const FILTERS: { id: StatusFilter; labelKey: string }[] = [
+  { id: "all", labelKey: "homework.filterAll" },
+  { id: "due-soon", labelKey: "homework.filterDueSoon" },
+  { id: "pending", labelKey: "homework.filterPending" },
+  { id: "overdue", labelKey: "homework.filterOverdue" },
+  { id: "done", labelKey: "homework.filterDone" },
 ];
 
-type StatusStyle = { bg: string; border: string; color: string; label: string };
+type StatusStyle = { bg: string; border: string; color: string; labelKey: string };
 
 const STATUS_STYLES: Record<HomeworkStatus, StatusStyle> = {
-  done:       { bg: "rgba(50,90,60,0.20)",  border: "rgba(50,90,60,0.35)",  color: "#88c8a0", label: "Hotové" },
-  overdue:    { bg: "rgba(90,40,40,0.20)",  border: "rgba(90,40,40,0.35)",  color: "#c88888", label: "Oneskorené" },
-  "due-soon": { bg: "rgba(110,78,20,0.20)", border: "rgba(110,78,20,0.35)", color: "#d4a85a", label: "Čoskoro" },
-  pending:    { bg: "rgba(30,54,84,0.20)",  border: "rgba(30,54,84,0.35)",  color: "#7ab0d4", label: "Pending" },
+  done:       { bg: "rgba(50,90,60,0.20)",  border: "rgba(50,90,60,0.35)",  color: "#88c8a0", labelKey: "homework.statusDone" },
+  overdue:    { bg: "rgba(90,40,40,0.20)",  border: "rgba(90,40,40,0.35)",  color: "#c88888", labelKey: "homework.statusOverdue" },
+  "due-soon": { bg: "rgba(110,78,20,0.20)", border: "rgba(110,78,20,0.35)", color: "#d4a85a", labelKey: "homework.statusDueSoon" },
+  pending:    { bg: "rgba(30,54,84,0.20)",  border: "rgba(30,54,84,0.35)",  color: "#7ab0d4", labelKey: "homework.statusPending" },
 };
 
-type AiState = { phase: "idle" } | { phase: "loading" } | { phase: "success"; draft: string };
+type AiState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "success"; draft: string }
+  | { phase: "error"; message: string };
 
-function fmtDue(iso: string): string {
-  return new Date(iso).toLocaleDateString("sk-SK", { day: "numeric", month: "short" });
+function fmtDue(iso: string, locale: string): string {
+  return new Date(iso).toLocaleDateString(locale, { day: "numeric", month: "short" });
 }
 
 export default function HomeworkPage() {
-  // Seed from cache so returning to this tab is instant (no spinner/refetch).
-  const cachedHomework = peekCache<Homework[]>(HOMEWORK_CACHE_KEY);
-  const [homework, setHomework] = useState<Homework[]>(cachedHomework ?? []);
-  const [loading, setLoading] = useState(cachedHomework === undefined);
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useT();
+  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const { data, loading, refreshing, error, lastUpdated, refresh, mutate } =
+    useCachedResource<Homework[]>(HOMEWORK_CACHE_KEY, api.listHomework, {
+      errorFallback: t("homework.loadError"),
+    });
+  const homework = useMemo(() => data ?? [], [data]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [selected, setSelected] = useState<Homework | null>(null);
   const [ai, setAi] = useState<AiState>({ phase: "idle" });
   const [togglingDone, setTogglingDone] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    cachedFetch(HOMEWORK_CACHE_KEY, api.listHomework)
-      .then((items) => { if (!cancelled) setHomework(items); })
-      .catch((err: { detail?: string }) => { if (!cancelled) setError(err?.detail ?? "Nepodarilo sa načítať úlohy z EduPage."); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -81,18 +79,22 @@ export default function HomeworkPage() {
     setAi({ phase: "idle" });
   }
 
-  function runAi(hw: Homework) {
+  async function runAi(hw: Homework) {
     setAi({ phase: "loading" });
-    setTimeout(() => setAi({ phase: "success", draft: buildAiDraft(hw) }), 2200);
+    try {
+      // Backend (Gemini) pulls in the assignment's attachments and the
+      // student's custom instructions; we only hand it the assignment id.
+      const result = await api.generateAiDraft(hw.id);
+      setAi({ phase: "success", draft: result.draft });
+    } catch (err) {
+      setAi({ phase: "error", message: (err as { detail?: string })?.detail ?? t("homework.aiError") });
+    }
   }
 
   async function toggleDone(hw: Homework, done: boolean) {
     const apply = (submitted: boolean) => {
-      setHomework((list) => {
-        const next = list.map((h) => (h.id === hw.id ? { ...h, submitted } : h));
-        setCache(HOMEWORK_CACHE_KEY, next); // keep the cached list in sync with the optimistic update
-        return next;
-      });
+      // `mutate` updates both the on-screen list and the cache in one step.
+      mutate((list) => (list ?? []).map((h) => (h.id === hw.id ? { ...h, submitted } : h)));
       setSelected((cur) => (cur?.id === hw.id ? { ...cur, submitted } : cur));
     };
     setTogglingDone((prev) => new Set(prev).add(hw.id));
@@ -101,7 +103,7 @@ export default function HomeworkPage() {
       await api.setHomeworkDone(hw.id, done);
     } catch (err) {
       apply(!done);
-      setToast((err as { detail?: string })?.detail ?? "Nepodarilo sa uložiť zmenu.");
+      setToast((err as { detail?: string })?.detail ?? t("homework.saveError"));
     } finally {
       setTogglingDone((prev) => { const next = new Set(prev); next.delete(hw.id); return next; });
     }
@@ -116,30 +118,33 @@ export default function HomeworkPage() {
   return (
     <div style={{ padding: "36px 40px" }}>
       {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <div
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 9,
-            letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "rgba(176,141,87,0.5)",
-            marginBottom: 6,
-          }}
-        >
-          Zoznam
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+        <div>
+          <div
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              color: "rgba(176,141,87,0.5)",
+              marginBottom: 6,
+            }}
+          >
+            {t("homework.eyebrow")}
+          </div>
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: 34,
+              fontWeight: 500,
+              color: "#E8DCC7",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {t("homework.title")}
+          </div>
         </div>
-        <div
-          style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 34,
-            fontWeight: 500,
-            color: "#E8DCC7",
-            letterSpacing: "-0.01em",
-          }}
-        >
-          Domáce úlohy
-        </div>
+        <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
       </div>
 
       {/* Filter bar */}
@@ -165,7 +170,7 @@ export default function HomeworkPage() {
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Hľadať…"
+            placeholder={t("common.search")}
             style={{
               background: "transparent",
               border: "none",
@@ -201,7 +206,7 @@ export default function HomeworkPage() {
                 transition: "all 0.15s",
               }}
             >
-              {f.label}
+              {t(f.labelKey)}
             </button>
           );
         })}
@@ -244,7 +249,7 @@ export default function HomeworkPage() {
               color: "rgba(232,220,199,0.28)",
             }}
           >
-            Žiadne úlohy nezodpovedajú filtru.
+            {t("homework.noMatch")}
           </p>
         </div>
       ) : (
@@ -312,6 +317,7 @@ export default function HomeworkPage() {
 }
 
 function HomeworkCard({ hw, st, onClick }: { hw: Homework; st: StatusStyle; onClick: () => void }) {
+  const { t, locale } = useT();
   const [hovered, setHovered] = useState(false);
   return (
     <button
@@ -349,7 +355,7 @@ function HomeworkCard({ hw, st, onClick }: { hw: Homework; st: StatusStyle; onCl
             flexShrink: 0,
           }}
         >
-          {st.label}
+          {t(st.labelKey)}
         </span>
       </div>
       <div
@@ -390,7 +396,7 @@ function HomeworkCard({ hw, st, onClick }: { hw: Homework; st: StatusStyle; onCl
             <path d="M4 1v2M10 1v2M1 5h12" stroke="rgba(232,220,199,0.28)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: "rgba(232,220,199,0.35)", letterSpacing: "0.05em" }}>
-            {fmtDue(hw.dueAt)}
+            {fmtDue(hw.dueAt, locale)}
           </span>
         </div>
         <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.28)" }}>
@@ -412,6 +418,7 @@ interface DrawerProps {
 }
 
 function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDraft, onClose }: DrawerProps) {
+  const { t, locale } = useT();
   const st = STATUS_STYLES[getHomeworkStatus(homework)];
   const [attachments, setAttachments] = useState<HomeworkAttachment[]>([]);
   const [attLoading, setAttLoading] = useState(Boolean(homework.hasAttachments));
@@ -429,10 +436,10 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
     api
       .listHomeworkAttachments(homework.id)
       .then((files) => { if (!cancelled) setAttachments(files); })
-      .catch((err: { detail?: string }) => { if (!cancelled) setAttError(err?.detail ?? "Nepodarilo sa načítať prílohy."); })
+      .catch((err: { detail?: string }) => { if (!cancelled) setAttError(err?.detail ?? t("homework.attachmentsError")); })
       .finally(() => { if (!cancelled) setAttLoading(false); });
     return () => { cancelled = true; };
-  }, [homework.id, homework.hasAttachments]);
+  }, [homework.id, homework.hasAttachments, t]);
 
   return (
     <>
@@ -479,13 +486,13 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
                 {homework.title}
               </div>
               <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.35)", marginTop: 5 }}>
-                {homework.teacher} · splatné {fmtDue(homework.dueAt)}
+                {homework.teacher} · {t("homework.due", { date: fmtDue(homework.dueAt, locale) })}
               </div>
             </div>
             <button
               type="button"
               onClick={onClose}
-              aria-label="Zavrieť"
+              aria-label={t("common.close")}
               style={{
                 width: 28,
                 height: 28,
@@ -519,7 +526,7 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
               border: `1px solid ${st.border}`,
             }}
           >
-            {st.label}
+            {t(st.labelKey)}
           </span>
 
           <div style={{ height: 1, background: "rgba(176,141,87,0.1)", margin: "16px 0" }} />
@@ -548,13 +555,13 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
               transition: "all 0.2s",
             }}
           >
-            {doneBusy ? "Ukladanie…" : homework.submitted ? "✓ Hotové — kliknúť na zrušenie" : "Označiť ako hotové"}
+            {doneBusy ? t("settings.saving") : homework.submitted ? t("homework.markDoneToggle") : t("homework.markDone")}
           </button>
 
           {/* Description */}
           <div style={{ marginBottom: 18 }}>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 8 }}>
-              Zadanie
+              {t("homework.assignment")}
             </div>
             <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "rgba(232,220,199,0.68)", lineHeight: 1.65, whiteSpace: "pre-line" }}>
               {homework.description}
@@ -565,14 +572,14 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
           {homework.hasAttachments && (
             <div style={{ marginBottom: 18 }}>
               <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 8 }}>
-                Prílohy
+                {t("homework.attachments")}
               </div>
               {attLoading ? (
                 <div style={{ height: 36, background: "rgba(176,141,87,0.06)", borderRadius: 6 }} />
               ) : attError ? (
                 <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#c88888" }}>{attError}</p>
               ) : attachments.length === 0 ? (
-                <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "rgba(232,220,199,0.3)" }}>Žiadne prílohy.</p>
+                <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "rgba(232,220,199,0.3)" }}>{t("homework.noAttachments")}</p>
               ) : (
                 <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
                   {attachments.map((f) => (
@@ -641,7 +648,7 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
                   }}
                 />
                 <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", color: "rgba(176,141,87,0.8)" }}>
-                  AI generuje návrh…
+                  {t("homework.aiGenerating")}
                 </span>
               </div>
               <div style={{ height: 8, background: "rgba(176,141,87,0.08)", borderRadius: 4, marginBottom: 6, width: "88%" }} />
@@ -662,17 +669,17 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
                 }}
               >
                 <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "#88c8a0" }}>
-                  Návrh je pripravený — skontroluj a uprav ho pred použitím.
+                  {t("homework.aiReady")}
                 </span>
               </div>
               <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
-                AI Návrh — upraviteľné
+                {t("homework.aiDraftLabel")}
               </div>
               <textarea
                 value={ai.draft}
                 onChange={(e) => onEditDraft(e.target.value)}
                 rows={9}
-                aria-label="AI návrh (upraviteľné)"
+                aria-label={t("homework.aiDraftAria")}
                 spellCheck={false}
                 style={{
                   width: "100%",
@@ -685,8 +692,27 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
                 }}
               />
               <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, color: "rgba(232,220,199,0.22)", marginTop: 6 }}>
-                Nič sa neodovzdáva automaticky.
+                {t("homework.aiNothingSubmitted")}
               </div>
+            </div>
+          )}
+
+          {ai.phase === "error" && (
+            <div>
+              <div
+                style={{
+                  background: "rgba(90,40,40,0.18)",
+                  border: "1px solid rgba(90,40,40,0.35)",
+                  borderRadius: 6,
+                  padding: "10px 14px",
+                  marginBottom: 12,
+                }}
+              >
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "#c88888" }}>
+                  {ai.message}
+                </span>
+              </div>
+              <AiButton onClick={onRunAi} labelKey="homework.aiRetry" />
             </div>
           )}
         </div>
@@ -695,7 +721,8 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
   );
 }
 
-function AiButton({ onClick }: { onClick: () => void }) {
+function AiButton({ onClick, labelKey = "homework.aiButton" }: { onClick: () => void; labelKey?: string }) {
+  const { t } = useT();
   const [hovered, setHovered] = useState(false);
   return (
     <button
@@ -722,13 +749,14 @@ function AiButton({ onClick }: { onClick: () => void }) {
         <path d="M7 1l1.4 3.5L12 5 9.7 7.3l.8 3.7L7 9.5 3.5 11l.8-3.7L2 5l3.6-.5L7 1z" stroke="#B08D57" strokeWidth="1.2" strokeLinejoin="round" />
       </svg>
       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#B08D57" }}>
-        Nechaj AI vypracovať
+        {t(labelKey)}
       </span>
     </button>
   );
 }
 
 function ErrorPanel({ message }: { message: string }) {
+  const { t } = useT();
   return (
     <div
       style={{
@@ -741,7 +769,7 @@ function ErrorPanel({ message }: { message: string }) {
     >
       <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{message}</p>
       <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>
-        Skúste znova alebo sa prihláste.
+        {t("common.retryOrLogin")}
       </p>
     </div>
   );

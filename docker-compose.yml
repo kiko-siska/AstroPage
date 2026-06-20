@@ -5,8 +5,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-astropage}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-astropage}
       POSTGRES_DB: ${POSTGRES_DB:-astropage}
-    ports:
-      - "${DB_PORT:-5432}:5432"
+    # No host port — DB is internal-only. To access it for maintenance,
+    # use: docker compose exec db psql -U astropage
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,12 +20,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "${PORT:-8000}:8000"
+    # No host port — backend is internal-only, reached via the nginx proxy.
+    # The CD health check runs inside the container with `docker compose exec`.
     env_file: ./backend/.env
     environment:
-      # Inside the compose network the database is reachable at host `db`,
-      # not `localhost` — override whatever .env sets for local dev.
+      # Inside the compose network the database is reachable at host `db`.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-astropage}:${POSTGRES_PASSWORD:-astropage}@db:5432/${POSTGRES_DB:-astropage}
     depends_on:
       db:
@@ -36,11 +35,26 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    ports:
-      - "5173:80"
+    # No host port binding — only Caddy reaches this service internally.
     depends_on:
       - backend
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"    # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # TLS cert storage — must be a named volume
+      - caddy_config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

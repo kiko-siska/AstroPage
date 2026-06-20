@@ -1,50 +1,78 @@
-# CD — Deploy to container registry on push to main.
-# This is a TEMPLATE. Fill in the commented sections before enabling.
+# CD — Deploy to the home server (RPI5) via a self-hosted runner.
+#
+# The runner lives ON the RPI5, so deployment is: sync the persistent clone
+# and rebuild the compose stack in place. No container registry, no inbound
+# ports — the runner polls GitHub outbound.
+#
+# Prerequisites (one-time setup — see DEPLOY.md):
+#   - Docker + compose plugin; runner user in the `docker` group.
+#   - A persistent clone at $DEPLOY_DIR with backend/.env (holds secrets).
+#   - A self-hosted runner registered with the `astropage` label.
+#   - Ports 80 and 443 forwarded from the router to the RPI5.
+#   - DNS A record for astropage.onboard.academy → public IP.
 name: CD
 
 on:
-  workflow_dispatch: # enable when ready for production
+  # Only deploy after CI passes on main — avoids deploying broken code.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Manual trigger from the Actions tab.
+  workflow_dispatch:
+
+# Never let two deploys run at once; let the in-flight one finish.
+concurrency:
+  group: deploy-home
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
-    name: Build & Push Docker image
-    runs-on: ubuntu-latest
-    # Only run after CI passes
-    needs: []
+  deploy:
+    name: Deploy to RPI5
+    # Only run if the triggering CI workflow actually passed (not on failure).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, astropage]
+    env:
+      DEPLOY_DIR: /opt/astropage
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # No actions/checkout — deploy from the persistent clone that holds .env.
+      - name: Sync deploy directory to this commit
+        run: |
+          cd "$DEPLOY_DIR"
+          git fetch --prune origin
+          git checkout main
+          git reset --hard origin/main
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Build and (re)start the stack
+        run: |
+          cd "$DEPLOY_DIR"
+          docker compose up -d --build --remove-orphans
 
-      # --- Configure your registry below ---
-      # Example: GitHub Container Registry (ghcr.io)
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Wait for backend to be healthy
+        run: |
+          # Backend has no host port — check health from inside the container.
+          for i in $(seq 1 30); do
+            if docker compose -f "$DEPLOY_DIR/docker-compose.yml" exec -T backend \
+                curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+              echo "backend is up after $((i * 2))s"; exit 0
+            fi
+            sleep 2
+          done
+          echo "backend did not come up — recent logs:" >&2
+          docker compose -f "$DEPLOY_DIR/docker-compose.yml" logs --tail=50 backend >&2
+          exit 1
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=sha,prefix=sha-
+      - name: Verify HTTPS endpoint is reachable
+        run: |
+          # Give Caddy a moment to acquire/present the cert after a fresh deploy.
+          sleep 5
+          if curl -fsS https://astropage.onboard.academy/api/health >/dev/null 2>&1; then
+            echo "HTTPS endpoint is up"
+          else
+            echo "Warning: HTTPS endpoint not yet reachable (cert may still be provisioning)"
+          fi
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Prune dangling images
+        if: always()
+        run: docker image prune -f

@@ -17,6 +17,22 @@ def upcoming_weekdays(start: date, weeks: int) -> list[date]:
     return [monday + timedelta(weeks=w, days=d) for w in range(weeks) for d in range(5)]
 
 
+def next_school_days(start: date, count: int) -> list[date]:
+    """The next `count` school days (Mon–Fri) on or after `start`, skipping weekends.
+
+    The canteen is closed on weekends, so ordering for a Saturday/Sunday just
+    errors — we never include them. `count` is therefore counted in school days,
+    not calendar days, so a request for 5 yields a full school week.
+    """
+    days: list[date] = []
+    day = start
+    while len(days) < count:
+        if day.weekday() < 5:  # 0=Mon .. 4=Fri
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
 async def list_meals(edupage: Edupage, weeks: int) -> list[MealDayOut]:
     days = upcoming_weekdays(date.today(), min(max(weeks, 1), MAX_WEEKS))
     meal_days = await edupage_service.fetch_meals(edupage, days)
@@ -41,18 +57,20 @@ async def order(edupage: Edupage, day: date, choice: str | None) -> str | None:
 
 
 async def bulk_signup(edupage: Edupage, days_count: int, preferred_choice: str) -> tuple[int, int]:
-    """Order `preferred_choice` on every open day in the next `days_count` days.
+    """Order `preferred_choice` on the next `days_count` school days.
 
-    Starts from tomorrow. A day is skipped (not an error) when the kitchen is
-    closed, the student is already signed up, the preferred menu isn't offered,
-    or EduPage rejects the change (e.g. past the cut-off). Returns
+    Starts from tomorrow and counts only Mon–Fri (weekends are skipped outright —
+    the canteen is closed then and ordering would error). A day within that span
+    is still skipped (not an error) when the kitchen is closed for a holiday, the
+    student is already signed up, the preferred menu isn't offered, or EduPage
+    rejects the change (e.g. past the cut-off). Returns
     ``(updated_days, skipped_days)``.
 
     Each EduPage round trip is sequential by design: the underlying
     ``requests.Session`` is not thread-safe, so concurrent orders would race.
     """
     start = date.today() + timedelta(days=1)
-    days = [start + timedelta(days=i) for i in range(days_count)]
+    days = next_school_days(start, days_count)
     meal_days = await edupage_service.fetch_meals(edupage, days)
 
     # Pick the days worth attempting: open, not already ordered, offering the

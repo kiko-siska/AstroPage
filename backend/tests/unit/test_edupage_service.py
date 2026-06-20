@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.services import edupage_service
 from app.services.edupage_service import (
     EduPageDataError,
     _collect_files,
@@ -157,59 +158,55 @@ def test_set_homework_done_not_applied_raises():
 
 
 # ── Meal ordering: verify-after-write ─────────────────────────────────────────
-# edupage-api sets `ordered_meal` optimistically and only raises on a hard
-# error, so the service re-reads the day to confirm an order actually landed.
+# A `ulozJedlaStravnika` POST EduPage silently ignores still returns no error, so
+# the service re-reads the day (via the raw `/menu/` JSON) to confirm an order
+# actually landed. These tests patch the GET/POST seams to model that.
 
 
-class _FakeLunch:
-    """Mimics edupage-api's Meal: `choose`/`sign_off` update `ordered_meal`
-    optimistically, but only touch the shared `server` dict when it persists."""
+def _patch_order_seams(monkeypatch, server: dict):
+    """Wire `_listok_json_blocking`/`_post_order_blocking` to a shared `server`
+    dict {"ordered": <letter|None>, "persist": bool}, mirroring EduPage's state."""
 
-    def __init__(self, server: dict):
-        self._server = server
-        self.amount_of_foods = 2
-        self.ordered_meal = server["ordered"]
+    def fake_listok(edupage, day):
+        ordered = server["ordered"]
+        # evidencia.stav is a letter when ordered, "X" when signed off.
+        lunch = {
+            "isCooking": True,
+            "druhov_jedal": 2,
+            "evidencia": {"stav": ordered or "X", "obj": ordered or "X"},
+        }
+        return {"stravnikid": "1707"}, lunch
 
-    def choose(self, edupage, number):
-        letter = "ABCDEFGH"[number - 1]
-        self.ordered_meal = letter  # optimistic, like the real library
-        if self._server["persist"]:
-            self._server["ordered"] = letter
+    def fake_post(edupage, day, boarder_id, code):
+        if server["persist"]:
+            server["ordered"] = None if code == edupage_service._SIGN_OFF else code
 
-    def sign_off(self, edupage):
-        self.ordered_meal = None
-        if self._server["persist"]:
-            self._server["ordered"] = None
-
-
-class _FakeEdupage:
-    def __init__(self, server: dict):
-        self._server = server
-
-    def get_meals(self, day):
-        # Each fetch reflects the current server state (fresh object).
-        return SimpleNamespace(lunch=_FakeLunch(self._server))
+    monkeypatch.setattr(edupage_service, "_listok_json_blocking", fake_listok)
+    monkeypatch.setattr(edupage_service, "_post_order_blocking", fake_post)
 
 
-def test_order_blocking_returns_choice_when_it_persists():
+def test_order_blocking_returns_choice_when_it_persists(monkeypatch):
     server = {"ordered": None, "persist": True}
-    result = _order_blocking(_FakeEdupage(server), date(2026, 6, 15), "A")
+    _patch_order_seams(monkeypatch, server)
+    result = _order_blocking(object(), date(2026, 6, 15), "A")
     assert result == "A"
     assert server["ordered"] == "A"
 
 
-def test_order_blocking_raises_when_order_silently_ignored():
-    # The far-future-day case: choose() doesn't raise, but the re-read shows the
+def test_order_blocking_raises_when_order_silently_ignored(monkeypatch):
+    # The far-future-day case: the POST doesn't error, but the re-read shows the
     # order never landed → must surface as an error, not a false success.
     server = {"ordered": None, "persist": False}
+    _patch_order_seams(monkeypatch, server)
     with pytest.raises(EduPageDataError) as exc:
-        _order_blocking(_FakeEdupage(server), date(2026, 6, 15), "A")
+        _order_blocking(object(), date(2026, 6, 15), "A")
     assert exc.value.reason == "order_not_persisted"
 
 
-def test_order_blocking_sign_off_confirmed():
+def test_order_blocking_sign_off_confirmed(monkeypatch):
     server = {"ordered": "A", "persist": True}
-    assert _order_blocking(_FakeEdupage(server), date(2026, 6, 15), None) is None
+    _patch_order_seams(monkeypatch, server)
+    assert _order_blocking(object(), date(2026, 6, 15), None) is None
     assert server["ordered"] is None
 
 

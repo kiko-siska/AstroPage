@@ -3,6 +3,7 @@
 from datetime import date, timedelta
 
 from app.services import edupage_service
+from app.services.canteen_service import next_school_days
 from app.services.edupage_service import EduPageDataError, MealDay, MealMenu
 
 
@@ -83,8 +84,9 @@ def test_bulk_signup_requires_auth(client):
 
 
 def test_bulk_signup_returns_summary(auth_client, monkeypatch):
-    tomorrow = date.today() + timedelta(days=1)
-    closed = {tomorrow + timedelta(days=1)}  # second day is closed
+    # bulk-signup walks school days (weekends skipped); close the second one.
+    school_days = next_school_days(date.today() + timedelta(days=1), count=2)
+    closed = {school_days[1]}  # second school day is closed
     persisted: dict = {}
     ordered: list = []
 

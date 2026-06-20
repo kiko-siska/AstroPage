@@ -1,0 +1,30 @@
+astropage.onboard.academy {
+    # All traffic → frontend nginx, which also proxies /api/ to the backend.
+    reverse_proxy frontend:80 {
+        # AI draft generation can take 20-30 s with large attachments.
+        transport http {
+            response_header_timeout 90s
+            read_timeout 90s
+        }
+    }
+
+    # Security headers — tight defaults for a school-student portal.
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options    nosniff
+        X-Frame-Options           DENY
+        Referrer-Policy           strict-origin-when-cross-origin
+        # Allow Gemini (inline scripts/styles from React build)
+        Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'"
+        -Server
+    }
+
+    # Caddy auto-provisions a Let's Encrypt TLS cert — nothing else needed.
+    # It renews it automatically 30 days before expiry.
+    encode gzip zstd
+}
+
+# Redirect bare http → https (Caddy does this automatically, but explicit is clear)
+http://astropage.onboard.academy {
+    redir https://{host}{uri} permanent
+}

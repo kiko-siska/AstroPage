@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 
 from app.services import edupage_service
-from app.services.canteen_service import bulk_signup, upcoming_weekdays
+from app.services.canteen_service import bulk_signup, next_school_days, upcoming_weekdays
 from app.services.edupage_service import EduPageDataError, MealDay, MealMenu
 
 
@@ -20,6 +20,19 @@ def test_start_on_monday_is_stable():
     days = upcoming_weekdays(date(2026, 6, 8), weeks=1)
     assert days[0] == date(2026, 6, 8)
     assert len(days) == 5
+
+
+def test_next_school_days_skips_weekends():
+    # Start on a Friday: only Fri counts before the weekend is skipped to Mon.
+    days = next_school_days(date(2026, 6, 19), count=5)  # 2026-06-19 is a Friday
+    assert days == [
+        date(2026, 6, 19),  # Fri
+        date(2026, 6, 22),  # Mon (Sat 20 + Sun 21 skipped)
+        date(2026, 6, 23),  # Tue
+        date(2026, 6, 24),  # Wed
+        date(2026, 6, 25),  # Thu
+    ]
+    assert all(d.weekday() < 5 for d in days)
 
 
 # ── bulk sign-up ──────────────────────────────────────────────────────────────
@@ -42,16 +55,17 @@ def _closed_day(day: date) -> MealDay:
     )
 
 
-async def test_bulk_signup_starts_tomorrow_and_orders_preferred(monkeypatch):
-    tomorrow = date.today() + timedelta(days=1)
+async def test_bulk_signup_starts_next_school_day_and_orders_preferred(monkeypatch):
+    # The span is the next 4 school days from tomorrow — weekends never appear.
+    school_days = next_school_days(date.today() + timedelta(days=1), count=4)
     first_call_days: list[date] = []
     ordered: list[tuple[date, str]] = []
     persisted: dict[date, str] = {}
 
-    # day 0 open & free → order; day 1 closed → skip;
+    # day 0 open & free → order; day 1 closed (holiday) → skip;
     # day 2 already ordered "B" → skip; day 3 open & free → order.
-    closed = {tomorrow + timedelta(days=1)}
-    preexisting = {tomorrow + timedelta(days=2): "B"}
+    closed = {school_days[1]}
+    preexisting = {school_days[2]: "B"}
 
     async def fake_meals(edupage, days):
         if not first_call_days:
@@ -74,10 +88,11 @@ async def test_bulk_signup_starts_tomorrow_and_orders_preferred(monkeypatch):
 
     updated, skipped = await bulk_signup(object(), days_count=4, preferred_choice="A")
 
-    assert first_call_days[0] == tomorrow
+    assert first_call_days == school_days  # weekday-only span, no weekends
+    assert all(d.weekday() < 5 for d in first_call_days)
     assert updated == 2  # day 0 and day 3 confirmed as "A"
     assert skipped == 2  # day 1 closed, day 2 already ordered
-    assert ordered == [(tomorrow, "A"), (tomorrow + timedelta(days=3), "A")]
+    assert ordered == [(school_days[0], "A"), (school_days[3], "A")]
 
 
 async def test_bulk_signup_counts_only_orders_that_persist(monkeypatch):

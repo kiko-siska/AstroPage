@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { api, type Grade, type SubjectGrades } from "../api/client";
-import { cachedFetch, peekCache } from "../api/cache";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
 
 // A grade inside the sandbox: every official grade is copied in, hypotheticals
 // are appended with `simulated: true`. Official grades can be temporarily
@@ -129,32 +131,17 @@ const fieldLabel: React.CSSProperties = {
 };
 
 export default function GradesPage() {
-  // Seed from cache so flipping back to this tab renders instantly (no spinner,
-  // no refetch within the cache TTL).
-  const cached = peekCache<SubjectGrades[]>(GRADES_CACHE_KEY);
-  const [subjects, setSubjects] = useState<SubjectGrades[]>(cached ?? []);
-  const [loading, setLoading] = useState(cached === undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedSubject, setSelectedSubject] = useState<string | null>(cached?.[0]?.subjectName ?? null);
-
-  useEffect(() => {
-    let cancelled = false;
-    cachedFetch(GRADES_CACHE_KEY, api.listGrades)
-      .then((data) => {
-        if (cancelled) return;
-        setSubjects(data);
-        setSelectedSubject((cur) => cur ?? data[0]?.subjectName ?? null);
-      })
-      .catch((err: { detail?: string }) => {
-        if (!cancelled) setError(err?.detail ?? "Nepodarilo sa načítať známky z EduPage.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { t } = useT();
+  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const { data, loading, refreshing, error, lastUpdated, refresh } =
+    useCachedResource<SubjectGrades[]>(GRADES_CACHE_KEY, api.listGrades, {
+      errorFallback: t("grades.loadError"),
+    });
+  const subjects = useMemo(() => data ?? [], [data]);
+  // null until the user picks; fall back to the first subject at render time so
+  // we never need a setState-in-effect to seed the default once grades arrive.
+  const [pickedSubject, setPickedSubject] = useState<string | null>(null);
+  const selectedSubject = pickedSubject ?? subjects[0]?.subjectName ?? null;
 
   const selected = useMemo(
     () => subjects.find((s) => s.subjectName === selectedSubject) ?? null,
@@ -164,20 +151,23 @@ export default function GradesPage() {
   return (
     <div style={{ padding: "36px 40px" }}>
       {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ ...eyebrow, marginBottom: 6 }}>Priemer · Simulácia</div>
-        <div
-          style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 34,
-            fontWeight: 500,
-            color: "#E8DCC7",
-            letterSpacing: "-0.01em",
-            lineHeight: 1,
-          }}
-        >
-          Známky
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+        <div>
+          <div style={{ ...eyebrow, marginBottom: 6 }}>{t("grades.eyebrow")}</div>
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: 34,
+              fontWeight: 500,
+              color: "#E8DCC7",
+              letterSpacing: "-0.01em",
+              lineHeight: 1,
+            }}
+          >
+            {t("grades.title")}
+          </div>
         </div>
+        <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
       </div>
 
       {error ? (
@@ -192,7 +182,7 @@ export default function GradesPage() {
         >
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{error}</p>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>
-            Skúste znova alebo sa prihláste.
+            {t("common.retryOrLogin")}
           </p>
         </div>
       ) : loading ? (
@@ -209,14 +199,14 @@ export default function GradesPage() {
         </div>
       ) : subjects.length === 0 ? (
         <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
-          <p style={{ ...eyebrow, color: "rgba(232,220,199,0.28)", margin: 0 }}>Zatiaľ žiadne známky.</p>
+          <p style={{ ...eyebrow, color: "rgba(232,220,199,0.28)", margin: 0 }}>{t("grades.noGrades")}</p>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "8px 0 0" }}>
-            Keď učitelia zadajú známky, zobrazia sa tu.
+            {t("grades.noGradesHint")}
           </p>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20, alignItems: "start" }}>
-          <ReportCard subjects={subjects} selected={selectedSubject} onSelect={setSelectedSubject} />
+          <ReportCard subjects={subjects} selected={selectedSubject} onSelect={setPickedSubject} />
           {selected ? (
             <Sandbox key={selected.subjectName} subject={selected} />
           ) : (
@@ -232,7 +222,7 @@ export default function GradesPage() {
                 color: "rgba(232,220,199,0.3)",
               }}
             >
-              Vyberte predmet pre simuláciu.
+              {t("grades.selectSubject")}
             </div>
           )}
         </div>
@@ -281,8 +271,9 @@ interface ReportCardProps {
 }
 
 function ReportCard({ subjects, selected, onSelect }: ReportCardProps) {
+  const { t } = useT();
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label="Predmety">
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label={t("grades.subjects")}>
       {subjects.map((subject) => {
         const isActive = subject.subjectName === selected;
         return (
@@ -340,7 +331,7 @@ function ReportCard({ subjects, selected, onSelect }: ReportCardProps) {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 12 }}>
               {subject.grades.map((g) => (
-                <span key={g.id} title={`${g.description}${g.maxPoints != null ? "" : ` · váha ${g.weight}`}`}>
+                <span key={g.id} title={`${g.description}${g.maxPoints != null ? "" : ` · ${t("grades.weightMeta", { n: g.weight })}`}`}>
                   <GradeBadge grade={g} />
                 </span>
               ))}
@@ -359,6 +350,7 @@ interface SandboxProps {
 }
 
 function Sandbox({ subject }: SandboxProps) {
+  const { t } = useT();
   const isPoints = subject.isPoints;
 
   // Deep-copy the official grades into local, editable sandbox state.
@@ -398,7 +390,7 @@ function Sandbox({ subject }: SandboxProps) {
         value: String(earned),
         weight: Math.round(max),
         maxPoints: max,
-        description: newLabel.trim() || "Hypotetická známka",
+        description: newLabel.trim() || t("grades.hypotheticalGrade"),
         date: null,
         simulated: true,
         hidden: false,
@@ -412,7 +404,7 @@ function Sandbox({ subject }: SandboxProps) {
         value: newValue,
         weight,
         maxPoints: null,
-        description: newLabel.trim() || "Hypotetická známka",
+        description: newLabel.trim() || t("grades.hypotheticalGrade"),
         date: null,
         simulated: true,
         hidden: false,
@@ -449,7 +441,7 @@ function Sandbox({ subject }: SandboxProps) {
       {/* Metric header: official vs simulated */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div style={{ background: "#100d08", border: "1px solid rgba(176,141,87,0.14)", borderRadius: 10, padding: "16px 18px" }}>
-          <div style={{ ...fieldLabel, marginBottom: 10 }}>Oficiálny priemer</div>
+          <div style={{ ...fieldLabel, marginBottom: 10 }}>{t("grades.officialAverage")}</div>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 32, fontWeight: 400, color: "#E8DCC7", lineHeight: 1, letterSpacing: "-0.02em" }}>
             {formatAverage(officialAvg, isPoints)}
           </div>
@@ -457,7 +449,7 @@ function Sandbox({ subject }: SandboxProps) {
         <div style={{ background: "rgba(176,141,87,0.1)", border: "1px solid rgba(176,141,87,0.3)", borderRadius: 10, padding: "16px 18px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
             <FlaskIcon />
-            <span style={{ ...fieldLabel, color: "#B08D57", marginBottom: 0 }}>Simulovaný priemer</span>
+            <span style={{ ...fieldLabel, color: "#B08D57", marginBottom: 0 }}>{t("grades.simulatedAverage")}</span>
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 32, fontWeight: 400, color: "#B08D57", lineHeight: 1, letterSpacing: "-0.02em" }}>
@@ -497,18 +489,18 @@ function Sandbox({ subject }: SandboxProps) {
         {isPoints ? (
           <>
             <label style={{ display: "block" }}>
-              <div style={fieldLabel}>Body</div>
+              <div style={fieldLabel}>{t("grades.points")}</div>
               <input
                 type="number"
                 min={0}
                 value={newEarned}
                 onChange={(e) => setNewEarned(e.target.value)}
-                placeholder="napr. 8"
+                placeholder={t("grades.pointsPlaceholder")}
                 style={{ width: 80, padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}
               />
             </label>
             <label style={{ display: "block" }}>
-              <div style={fieldLabel}>Max</div>
+              <div style={fieldLabel}>{t("grades.max")}</div>
               <input
                 type="number"
                 min={1}
@@ -521,7 +513,7 @@ function Sandbox({ subject }: SandboxProps) {
         ) : (
           <>
             <label style={{ display: "block" }}>
-              <div style={fieldLabel}>Známka</div>
+              <div style={fieldLabel}>{t("grades.grade")}</div>
               <select
                 value={newValue}
                 onChange={(e) => setNewValue(e.target.value)}
@@ -529,13 +521,13 @@ function Sandbox({ subject }: SandboxProps) {
               >
                 {["1", "2", "3", "4", "5", "A"].map((v) => (
                   <option key={v} value={v}>
-                    {v === "A" ? "A (absencia)" : v}
+                    {v === "A" ? t("grades.absent") : v}
                   </option>
                 ))}
               </select>
             </label>
             <label style={{ display: "block" }}>
-              <div style={fieldLabel}>Váha</div>
+              <div style={fieldLabel}>{t("grades.weight")}</div>
               <input
                 type="number"
                 min={1}
@@ -547,12 +539,12 @@ function Sandbox({ subject }: SandboxProps) {
           </>
         )}
         <label style={{ display: "block" }}>
-          <div style={fieldLabel}>Popis (voliteľné)</div>
+          <div style={fieldLabel}>{t("grades.descriptionOptional")}</div>
           <input
             type="text"
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
-            placeholder="napr. Veľká písomka"
+            placeholder={t("grades.descriptionPlaceholder")}
             style={{ width: "100%", padding: "9px 11px", fontFamily: "'Inter', sans-serif", fontSize: 13 }}
           />
         </label>
@@ -576,7 +568,7 @@ function Sandbox({ subject }: SandboxProps) {
             transition: "background 0.2s",
           }}
         >
-          Pridať +
+          {t("grades.add")}
         </button>
       </form>
 
@@ -584,7 +576,7 @@ function Sandbox({ subject }: SandboxProps) {
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
-            <span style={{ ...eyebrow, whiteSpace: "nowrap" }}>Známky</span>
+            <span style={{ ...eyebrow, whiteSpace: "nowrap" }}>{t("grades.title")}</span>
             <div style={{ flex: 1, height: 1, background: "rgba(176,141,87,0.1)" }} />
           </div>
           {modified && (
@@ -619,7 +611,7 @@ function Sandbox({ subject }: SandboxProps) {
               }}
             >
               <ResetIcon />
-              Vynulovať
+              {t("grades.reset")}
             </button>
           )}
         </div>
@@ -641,7 +633,11 @@ function Sandbox({ subject }: SandboxProps) {
 // ── One row in the sandbox grade list ─────────────────────────────────────────
 
 function GradeRow({ grade, onToggleHidden, onRemove }: { grade: SimGrade; onToggleHidden: () => void; onRemove: () => void }) {
-  const meta = grade.maxPoints != null ? `${grade.value}/${grade.maxPoints} bodov` : `váha ${grade.weight}`;
+  const { t } = useT();
+  const meta =
+    grade.maxPoints != null
+      ? t("grades.pointsMeta", { earned: grade.value, max: grade.maxPoints })
+      : t("grades.weightMeta", { n: grade.weight });
   return (
     <div
       style={{
@@ -686,7 +682,7 @@ function GradeRow({ grade, onToggleHidden, onRemove }: { grade: SimGrade; onTogg
                 padding: "2px 6px",
               }}
             >
-              Simulácia
+              {t("grades.simulatedBadge")}
             </span>
           )}
           {grade.hidden && (
@@ -703,7 +699,7 @@ function GradeRow({ grade, onToggleHidden, onRemove }: { grade: SimGrade; onTogg
                 padding: "2px 6px",
               }}
             >
-              Skryté
+              {t("grades.hidden")}
             </span>
           )}
         </div>
@@ -713,12 +709,12 @@ function GradeRow({ grade, onToggleHidden, onRemove }: { grade: SimGrade; onTogg
         </div>
       </div>
       {grade.simulated ? (
-        <IconButton label={`Odstrániť ${grade.description}`} onClick={onRemove} hoverColor="#c88888" hoverBg="rgba(90,40,40,0.18)">
+        <IconButton label={t("grades.removeAria", { name: grade.description })} onClick={onRemove} hoverColor="#c88888" hoverBg="rgba(90,40,40,0.18)">
           <TrashIcon />
         </IconButton>
       ) : (
         <IconButton
-          label={grade.hidden ? `Zobraziť ${grade.description}` : `Skryť ${grade.description}`}
+          label={grade.hidden ? t("grades.showAria", { name: grade.description }) : t("grades.hideAria", { name: grade.description })}
           onClick={onToggleHidden}
           hoverColor="#B08D57"
           hoverBg="rgba(176,141,87,0.12)"

@@ -1,8 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../context/AuthContext";
-
-const DEFAULT_PROMPT =
-  "Som žiak strednej školy. Pomáhaj mi pochopiť látku krok za krokom, nie len daj hotovú odpoveď.";
+import { useT } from "../i18n/LanguageContext";
 
 interface AiRules {
   systemPrompt: string;
@@ -13,12 +11,13 @@ interface AiRules {
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const [rules, setRules] = useState<AiRules>({
-    systemPrompt: DEFAULT_PROMPT,
+  const { t } = useT();
+  const [rules, setRules] = useState<AiRules>(() => ({
+    systemPrompt: t("settings.defaultPrompt"),
     stepByStep: true,
     simpleLanguage: false,
     citeSources: true,
-  });
+  }));
   const [saved, setSaved] = useState(false);
 
   function handleSave(e: FormEvent) {
@@ -32,10 +31,10 @@ export default function SettingsPage() {
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
-          Účet & AI
+          {t("settings.accountAi")}
         </div>
         <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em" }}>
-          Nastavenia
+          {t("settings.title")}
         </div>
       </div>
 
@@ -56,12 +55,12 @@ export default function SettingsPage() {
             <path d="M8 1v1.5M8 13.5V15M15 8h-1.5M2.5 8H1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1M12.6 12.6l-1.1-1.1M4.5 4.5L3.4 3.4" stroke="#B08D57" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
           <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: "#E8DCC7" }}>
-            AI Asistent — Pravidlá
+            {t("settings.aiRules")}
           </span>
         </div>
 
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
-          Vlastný systémový prompt
+          {t("settings.promptLabel")}
         </div>
         <textarea
           rows={4}
@@ -70,24 +69,24 @@ export default function SettingsPage() {
           style={{ width: "100%", padding: 12, fontFamily: "'Inter', sans-serif", fontSize: 13, lineHeight: 1.6, resize: "vertical" }}
         />
         <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.28)", marginTop: 6, marginBottom: 18 }}>
-          Pokyn pre štúdium je vždy pripojený automaticky a nedá sa odstrániť.
+          {t("settings.promptNote")}
         </div>
 
         <Toggle
-          label="Vysvetliť krok za krokom"
-          description="AI rozloží každé riešenie na kroky"
+          label={t("settings.presetStepByStep")}
+          description={t("settings.presetStepByStepDesc")}
           checked={rules.stepByStep}
           onChange={(v) => setRules((r) => ({ ...r, stepByStep: v }))}
         />
         <Toggle
-          label="Jednoduchší jazyk"
-          description="Bez zbytočného odborného žargónu"
+          label={t("settings.presetSimpler")}
+          description={t("settings.presetSimplerDesc")}
           checked={rules.simpleLanguage}
           onChange={(v) => setRules((r) => ({ ...r, simpleLanguage: v }))}
         />
         <Toggle
-          label="Citovať zdroje"
-          description="Odkazovať na učebnicu alebo zdroje"
+          label={t("settings.presetCite")}
+          description={t("settings.presetCiteDesc")}
           checked={rules.citeSources}
           onChange={(v) => setRules((r) => ({ ...r, citeSources: v }))}
         />
@@ -110,7 +109,7 @@ export default function SettingsPage() {
               transition: "background 0.2s",
             }}
           >
-            Uložiť
+            {t("settings.save")}
           </button>
           {saved && (
             <span
@@ -123,7 +122,7 @@ export default function SettingsPage() {
                 color: "#88c8a0",
               }}
             >
-              ✓ Uložené
+              ✓ {t("settings.saved")}
             </span>
           )}
         </div>
@@ -144,13 +143,13 @@ export default function SettingsPage() {
             <path d="M2 14c0-3 2.7-5 6-5s6 2 6 5" stroke="#B08D57" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
           <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: "#E8DCC7" }}>
-            Účet
+            {t("settings.account")}
           </span>
         </div>
 
-        <MetaRow label="Meno" value={user?.username ?? "—"} />
-        <MetaRow label="Škola" value={`${user?.subdomain ?? "—"}.edupage.org`} />
-        <MetaRow label="Relácia" value="Šifrovaná relácia na serveri (HttpOnly cookie)" />
+        <MetaRow label={t("login.username")} value={user?.username ?? "—"} />
+        <MetaRow label={t("common.school")} value={`${user?.subdomain ?? "—"}.edupage.org`} />
+        <MetaRow label={t("settings.session")} value={t("settings.sessionValue")} />
 
         <div
           style={{
@@ -169,7 +168,7 @@ export default function SettingsPage() {
             <path d="M4.5 7l1.5 1.5L9.5 5" stroke="#88c8a0" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "#88c8a0" }}>
-            Tvoje EduPage heslo sa nikdy neukladá.
+            {t("settings.passwordNever")}
           </span>
         </div>
       </div>

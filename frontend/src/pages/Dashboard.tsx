@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { api, type DashboardPeriod, type DashboardSummary } from "../api/client";
-import { cachedFetch, peekCache } from "../api/cache";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
 
 const DASHBOARD_CACHE_KEY = "dashboard";
 
@@ -17,8 +18,8 @@ function getScheduleState(p: DashboardPeriod): ScheduleState {
   return "normal";
 }
 
-function skDate(): string {
-  return new Date().toLocaleDateString("sk-SK", {
+function localeDate(locale: string): string {
+  return new Date().toLocaleDateString(locale, {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -28,63 +29,65 @@ function skDate(): string {
 
 export default function Dashboard() {
   const { user } = useAuth();
+  const { t, locale } = useT();
 
-  // Seed from cache so returning to the home tab is instant (no spinner/refetch).
-  const cached = peekCache<DashboardSummary>(DASHBOARD_CACHE_KEY);
-  const [summary, setSummary] = useState<DashboardSummary | null>(cached ?? null);
-  const [loading, setLoading] = useState(cached === undefined);
-  const [error, setError] = useState<string | null>(null);
+  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const { data: summary, loading, refreshing, error, lastUpdated, refresh } =
+    useCachedResource<DashboardSummary>(DASHBOARD_CACHE_KEY, api.getDashboard, {
+      errorFallback: t("dashboard.loadError"),
+    });
 
-  useEffect(() => {
-    let cancelled = false;
-    cachedFetch(DASHBOARD_CACHE_KEY, api.getDashboard)
-      .then((data) => { if (!cancelled) setSummary(data); })
-      .catch((err: { detail?: string }) => {
-        if (!cancelled) setError(err?.detail ?? "Nepodarilo sa načítať prehľad z EduPage.");
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const firstName = (user?.username ?? "Študent").split(".")[0];
+  const firstName = (user?.username ?? t("common.student")).split(".")[0];
   const displayName = firstName.charAt(0).toUpperCase() + firstName.slice(1);
 
   return (
     <div style={{ padding: "36px 40px" }}>
       {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 9,
-            letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "rgba(176,141,87,0.5)",
-            marginBottom: 6,
-          }}
-        >
-          {skDate()}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+        <div>
+          <div
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              color: "rgba(176,141,87,0.5)",
+              marginBottom: 6,
+            }}
+          >
+            {localeDate(locale)}
+          </div>
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: 34,
+              fontWeight: 500,
+              color: "#E8DCC7",
+              letterSpacing: "-0.01em",
+              lineHeight: 1,
+            }}
+          >
+            {(() => {
+              // Keep the student's name emphasised inside the localized greeting.
+              const [before, after] = t("dashboard.greeting").split("{name}");
+              return (
+                <>
+                  {before}
+                  <em style={{ fontStyle: "italic", color: "#B08D57" }}>{displayName}</em>
+                  {after}
+                </>
+              );
+            })()}
+          </div>
         </div>
-        <div
-          style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 34,
-            fontWeight: 500,
-            color: "#E8DCC7",
-            letterSpacing: "-0.01em",
-            lineHeight: 1,
-          }}
-        >
-          Dobrý deň,{" "}
-          <em style={{ fontStyle: "italic", color: "#B08D57" }}>{displayName}.</em>
-        </div>
+        <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
       </div>
 
       {error ? (
         <div style={{ background: "rgba(90,40,40,0.2)", border: "1px solid rgba(90,40,40,0.35)", borderRadius: 10, padding: "48px 24px", textAlign: "center" }}>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{error}</p>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>
-            Skúste znova alebo sa prihláste.
+            {t("common.retryOrLogin")}
           </p>
         </div>
       ) : loading || !summary ? (
@@ -97,6 +100,7 @@ export default function Dashboard() {
 }
 
 function DashboardBody({ summary }: { summary: DashboardSummary }) {
+  const { t, tn } = useT();
   const { dueWithin24h, pendingHomework, lessonsTotal, lessonsCancelled, schedule, scheduleAvailable } = summary;
 
   return (
@@ -119,13 +123,11 @@ function DashboardBody({ summary }: { summary: DashboardSummary }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#d4a85a", flexShrink: 0 }} />
               <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#d4a85a" }}>
-                {dueWithin24h === 1
-                  ? "1 úloha splatná do 24 hodín"
-                  : `${dueWithin24h} ${dueWithin24h < 5 ? "úlohy" : "úloh"} splatných do 24 hodín`}
+                {tn("dashboard.dueBanner", dueWithin24h)}
               </span>
             </div>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(212,168,90,0.65)" }}>
-              Otvoriť →
+              {t("dashboard.open")}
             </div>
           </div>
         </Link>
@@ -136,30 +138,30 @@ function DashboardBody({ summary }: { summary: DashboardSummary }) {
         <MetricCard
           dot="#B08D57"
           dotLabelColor="rgba(176,141,87,0.55)"
-          label="Aktívne úlohy"
+          label={t("dashboard.activeTasks")}
           value={String(pendingHomework)}
-          sub={pendingHomework === 0 ? "všetko hotové" : "nedokončené úlohy"}
+          sub={pendingHomework === 0 ? t("dashboard.allDone") : t("dashboard.unfinishedTasks")}
         />
         <MetricCard
           dot={dueWithin24h > 0 ? "#d4a85a" : "#4a8c62"}
           dotLabelColor={dueWithin24h > 0 ? "rgba(212,168,90,0.65)" : "rgba(74,140,98,0.65)"}
-          label="Splatné do 24h"
+          label={t("dashboard.due24")}
           value={String(dueWithin24h)}
-          sub={dueWithin24h > 0 ? "vyžaduje pozornosť" : "žiadny zhon"}
+          sub={dueWithin24h > 0 ? t("dashboard.needsAttention") : t("dashboard.noRush")}
         />
         <MetricCard
           dot="#4a7a8c"
           dotLabelColor="rgba(74,122,140,0.65)"
-          label="Dnešné hodiny"
+          label={t("dashboard.todayLessons")}
           value={String(lessonsTotal)}
-          sub={lessonsCancelled > 0 ? `${lessonsCancelled} zrušené` : "žiadne zrušené"}
+          sub={lessonsCancelled > 0 ? tn("dashboard.cancelledN", lessonsCancelled) : t("dashboard.noneCancelled")}
         />
       </div>
 
       {/* Schedule section header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", whiteSpace: "nowrap" }}>
-          Dnešný rozvrh
+          {t("dashboard.todaySchedule")}
         </div>
         <div style={{ flex: 1, height: 1, background: "rgba(176,141,87,0.1)" }} />
       </div>
@@ -168,7 +170,7 @@ function DashboardBody({ summary }: { summary: DashboardSummary }) {
       {schedule.length === 0 ? (
         <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "48px 24px", textAlign: "center" }}>
           <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(232,220,199,0.28)", margin: 0 }}>
-            {scheduleAvailable ? "Dnes nemáš žiadne hodiny." : "Rozvrh sa nepodarilo načítať."}
+            {scheduleAvailable ? t("dashboard.noLessonsToday") : t("dashboard.scheduleLoadFailed")}
           </p>
         </div>
       ) : (
@@ -231,6 +233,7 @@ function MetricCard({
 }
 
 function ScheduleItem({ period }: { period: DashboardPeriod }) {
+  const { t } = useT();
   const state = getScheduleState(period);
 
   const dotColor =
@@ -247,8 +250,8 @@ function ScheduleItem({ period }: { period: DashboardPeriod }) {
     "rgba(232,220,199,0.75)";
 
   const badge =
-    state === "now" ? { text: "Teraz", bg: "#B08D57", color: "#0a0805" } :
-    state === "cancelled" ? { text: "Zrušená", bg: "rgba(100,48,48,0.2)", color: "#c88888" } :
+    state === "now" ? { text: t("dashboard.now"), bg: "#B08D57", color: "#0a0805" } :
+    state === "cancelled" ? { text: t("common.cancelled"), bg: "rgba(100,48,48,0.2)", color: "#c88888" } :
     null;
 
   const meta = [period.classroom, period.teacher].filter(Boolean).join(" · ");

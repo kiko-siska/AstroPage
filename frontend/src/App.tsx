@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { LanguageProvider } from "./i18n/LanguageContext";
 import AppLayout from "./components/AppLayout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -55,11 +56,13 @@ function Root() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <GrainOverlay />
-      <BrowserRouter>
-        <Root />
-      </BrowserRouter>
-    </AuthProvider>
+    <LanguageProvider>
+      <AuthProvider>
+        <GrainOverlay />
+        <BrowserRouter>
+          <Root />
+        </BrowserRouter>
+      </AuthProvider>
+    </LanguageProvider>
   );
 }

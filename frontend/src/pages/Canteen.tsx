@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type MealDayDTO, type MenuOptionDTO } from "../api/client";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
 const WEEKS_AHEAD = 3;
+const MEALS_CACHE_KEY = `canteen:meals:${WEEKS_AHEAD}`;
 
 function parseDay(iso: string): Date {
   return new Date(`${iso}T00:00:00`);
@@ -14,14 +20,14 @@ function weekKey(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function weekLabel(key: string): string {
+function weekLabel(key: string, t: Translate): string {
   const thisMonday = weekKey(new Date().toISOString().slice(0, 10));
   const diffWeeks = Math.round(
     (parseDay(key).getTime() - parseDay(thisMonday).getTime()) / (7 * 24 * 60 * 60 * 1000),
   );
-  if (diffWeeks <= 0) return "Tento týždeň";
-  if (diffWeeks === 1) return "Budúci týždeň";
-  return `Za ${diffWeeks} týždne`;
+  if (diffWeeks <= 0) return t("canteen.thisWeek");
+  if (diffWeeks === 1) return t("canteen.nextWeek");
+  return t("canteen.inWeeks", { n: diffWeeks });
 }
 
 interface Week {
@@ -30,7 +36,7 @@ interface Week {
   days: MealDayDTO[];
 }
 
-function groupByWeek(meals: MealDayDTO[]): Week[] {
+function groupByWeek(meals: MealDayDTO[], t: Translate): Week[] {
   const buckets = new Map<string, MealDayDTO[]>();
   for (const meal of meals) {
     const key = weekKey(meal.date);
@@ -40,7 +46,7 @@ function groupByWeek(meals: MealDayDTO[]): Week[] {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, days]) => ({
       key,
-      label: weekLabel(key),
+      label: weekLabel(key, t),
       days: days.sort((a, b) => a.date.localeCompare(b.date)),
     }));
 }
@@ -48,9 +54,13 @@ function groupByWeek(meals: MealDayDTO[]): Week[] {
 type Toast = { tone: "error" | "success"; message: string } | null;
 
 export default function CanteenPage() {
-  const [meals, setMeals] = useState<MealDayDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useT();
+  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const { data, loading, refreshing, error, lastUpdated, refresh, mutate } =
+    useCachedResource<MealDayDTO[]>(MEALS_CACHE_KEY, () => api.listMeals(WEEKS_AHEAD), {
+      errorFallback: t("canteen.loadError"),
+    });
+  const meals = useMemo(() => data ?? [], [data]);
   const [activeWeek, setActiveWeek] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -58,32 +68,13 @@ export default function CanteenPage() {
   const [bulkDays, setBulkDays] = useState(5);
   const [bulkChoice, setBulkChoice] = useState("A");
 
-  function loadMeals(signal?: { cancelled: boolean }) {
-    return api
-      .listMeals(WEEKS_AHEAD)
-      .then((data) => {
-        if (signal?.cancelled) return;
-        setMeals(data);
-        setActiveWeek((cur) => cur ?? groupByWeek(data)[0]?.key ?? null);
-      })
-      .catch((err: { detail?: string }) => {
-        if (!signal?.cancelled) setError(err?.detail ?? "Nepodarilo sa načítať jedálny lístok.");
-      });
-  }
-
-  useEffect(() => {
-    const signal = { cancelled: false };
-    loadMeals(signal).finally(() => { if (!signal.cancelled) setLoading(false); });
-    return () => { signal.cancelled = true; };
-  }, []);
-
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(id);
   }, [toast]);
 
-  const weeks = useMemo(() => groupByWeek(meals), [meals]);
+  const weeks = useMemo(() => groupByWeek(meals, t), [meals, t]);
   const week = weeks.find((w) => w.key === activeWeek) ?? weeks[0];
 
   const letters = useMemo(() => {
@@ -93,7 +84,9 @@ export default function CanteenPage() {
   }, [meals]);
 
   function setOrdered(date: string, ordered: string | null) {
-    setMeals((prev) => prev.map((m) => (m.date === date ? { ...m, ordered_meal: ordered } : m)));
+    // `mutate` (updater form) keeps the on-screen list and cache in sync and is
+    // race-safe when several days are changed in quick succession.
+    mutate((prev) => (prev ?? []).map((m) => (m.date === date ? { ...m, ordered_meal: ordered } : m)));
   }
 
   function markPending(date: string, on: boolean) {
@@ -110,7 +103,7 @@ export default function CanteenPage() {
       setOrdered(date, res.ordered_meal);
     } catch (err) {
       setOrdered(date, previous);
-      setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? "Nepodarilo sa uložiť objednávku." });
+      setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? t("canteen.orderError") });
     } finally {
       markPending(date, false);
     }
@@ -120,22 +113,21 @@ export default function CanteenPage() {
     setBulkBusy(true);
     try {
       const res = await api.bulkSignup(bulkDays, bulkChoice);
-      await loadMeals();
+      refresh(); // bulk changed server state — force a fresh meals fetch
       if (res.updated_days === 0) {
         // Nothing actually landed on EduPage — usually every day was already
         // ordered, closed, or past its ordering window. Don't fake success.
-        setToast({
-          tone: "error",
-          message: `Žiadny deň sa nepodarilo objednať${res.skipped_days ? ` · ${res.skipped_days} preskočených (už objednané alebo mimo okna)` : ""}.`,
-        });
+        const skipped = res.skipped_days ? t("canteen.bulkNoneSkipped", { n: res.skipped_days }) : "";
+        setToast({ tone: "error", message: t("canteen.bulkNone", { skipped }) });
       } else {
+        const skipped = res.skipped_days ? t("canteen.bulkOkSkipped", { n: res.skipped_days }) : "";
         setToast({
           tone: "success",
-          message: `Naplánovaných ${res.updated_days} dní pre Menu ${bulkChoice}${res.skipped_days ? ` · ${res.skipped_days} preskočených` : ""}.`,
+          message: t("canteen.bulkOk", { updated: res.updated_days, choice: bulkChoice, skipped }),
         });
       }
     } catch (err) {
-      setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? "Auto-plánovanie zlyhalo." });
+      setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? t("canteen.bulkError") });
     } finally {
       setBulkBusy(false);
     }
@@ -144,13 +136,16 @@ export default function CanteenPage() {
   return (
     <div style={{ padding: "36px 40px" }}>
       {/* Header */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
-          Objednávky
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+        <div>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
+            {t("canteen.eyebrow")}
+          </div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em" }}>
+            {t("canteen.title")}
+          </div>
         </div>
-        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em" }}>
-          Jedáleň
-        </div>
+        <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
       </div>
 
       {/* Bulk automation */}
@@ -168,13 +163,13 @@ export default function CanteenPage() {
             <path d="M7 1l1.4 3.5L12 5 9.7 7.3l.8 3.7L7 9.5 3.5 11l.8-3.7L2 5l3.6-.5L7 1z" stroke="#B08D57" strokeWidth="1.2" strokeLinejoin="round" />
           </svg>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "#B08D57" }}>
-            Auto-objednávka
+            {t("canteen.autoOrder")}
           </span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
           <div>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 5 }}>
-              Počet dní (1–31)
+              {t("canteen.daysCount")}
             </div>
             <input
               type="number"
@@ -188,7 +183,7 @@ export default function CanteenPage() {
           </div>
           <div>
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 5 }}>
-              Preferované menu
+              {t("canteen.preferredMenu")}
             </div>
             <select
               value={bulkChoice}
@@ -197,7 +192,7 @@ export default function CanteenPage() {
               style={{ width: "100%", padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}
             >
               {letters.map((l) => (
-                <option key={l} value={l}>Menu {l}</option>
+                <option key={l} value={l}>{t("canteen.menu", { letter: l })}</option>
               ))}
             </select>
           </div>
@@ -221,7 +216,7 @@ export default function CanteenPage() {
               transition: "background 0.2s",
             }}
           >
-            {bulkBusy ? "Čakajte…" : "Spustiť →"}
+            {bulkBusy ? t("canteen.running") : t("canteen.run")}
           </button>
         </div>
       </div>
@@ -229,7 +224,7 @@ export default function CanteenPage() {
       {error ? (
         <div style={{ background: "rgba(90,40,40,0.2)", border: "1px solid rgba(90,40,40,0.35)", borderRadius: 10, padding: "48px 24px", textAlign: "center" }}>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{error}</p>
-          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>Skúste znova alebo sa prihláste.</p>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>{t("common.retryOrLogin")}</p>
         </div>
       ) : loading ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
@@ -240,7 +235,7 @@ export default function CanteenPage() {
       ) : !week ? (
         <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
           <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(232,220,199,0.28)", margin: 0 }}>
-            Žiadny jedálny lístok.
+            {t("canteen.noMenu")}
           </p>
         </div>
       ) : (
@@ -342,8 +337,9 @@ function DayCard({
   isPending: boolean;
   onChange: (choice: string | null) => void;
 }) {
+  const { t, locale } = useT();
   const d = parseDay(day.date);
-  const dayName = d.toLocaleDateString("sk-SK", { weekday: "long" }).toUpperCase();
+  const dayName = d.toLocaleDateString(locale, { weekday: "long" }).toUpperCase();
   const dateStr = `${d.getDate()}.${d.getMonth() + 1}.`;
   const signedUp = day.ordered_meal !== null;
 
@@ -373,7 +369,7 @@ function DayCard({
             }}
           >
             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7, letterSpacing: "0.1em", color: signedUp ? "#88c8a0" : "rgba(232,220,199,0.32)" }}>
-              {signedUp ? `Prihlásený — Menu ${day.ordered_meal}` : "Neprihlásený"}
+              {signedUp ? t("canteen.signedUp", { letter: day.ordered_meal ?? "" }) : t("canteen.notSignedUp")}
             </span>
           </div>
           {signedUp && day.open && (
@@ -397,7 +393,7 @@ function DayCard({
                 whiteSpace: "nowrap",
               }}
             >
-              Odhlásiť ✕
+              {t("canteen.signOff")} ✕
             </button>
           )}
         </div>
@@ -407,13 +403,13 @@ function DayCard({
       {!day.open ? (
         <div style={{ padding: "18px 12px", textAlign: "center" }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.18)" }}>
-            Zatvorené
+            {t("canteen.closed")}
           </div>
         </div>
       ) : day.options.length === 0 ? (
         <div style={{ padding: "18px 12px", textAlign: "center" }}>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.18)" }}>
-            Lístok nezverejnený
+            {t("canteen.menuNotPublished")}
           </div>
         </div>
       ) : (
@@ -444,7 +440,8 @@ function MealOption({
   disabled: boolean;
   onClick: () => void;
 }) {
-  const details = [opt.weight, opt.allergens ? `alerg: ${opt.allergens}` : null].filter(Boolean).join(" · ");
+  const { t } = useT();
+  const details = [opt.weight, opt.allergens ? t("canteen.allergens", { a: opt.allergens }) : null].filter(Boolean).join(" · ");
 
   return (
     <button
@@ -464,7 +461,7 @@ function MealOption({
       }}
     >
       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, letterSpacing: "0.12em", textTransform: "uppercase", color: "#B08D57", marginBottom: 3 }}>
-        Menu {opt.letter}
+        {t("canteen.menu", { letter: opt.letter })}
       </div>
       <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 500, color: "#E8DCC7", lineHeight: 1.3, marginBottom: 2 }}>
         {opt.name ?? "—"}

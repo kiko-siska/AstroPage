@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useT } from "../i18n/LanguageContext";
+import LanguageSwitcher from "./LanguageSwitcher";
 
 
 const COPPER = "#B08D57";
@@ -57,6 +59,7 @@ function NavItem({
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
+  const { t } = useT();
   const navigate = useNavigate();
 
   async function handleLogout() {
@@ -147,7 +150,7 @@ export default function AppLayout() {
                 whiteSpace: "nowrap",
               }}
             >
-              {user?.username ?? "Student"}
+              {user?.username ?? t("common.student")}
             </div>
             <div
               style={{
@@ -168,7 +171,7 @@ export default function AppLayout() {
           <NavItem
             to="/"
             end
-            label="Dashboard"
+            label={t("nav.dashboard")}
             icon={(c) => (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <rect x="2" y="2" width="5" height="5" rx="1" stroke={c} strokeWidth="1.3" />
@@ -180,7 +183,7 @@ export default function AppLayout() {
           />
           <NavItem
             to="/homework"
-            label="Domáce úlohy"
+            label={t("nav.homework")}
             icon={(c) => (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <rect x="2" y="1" width="12" height="14" rx="1.5" stroke={c} strokeWidth="1.3" />
@@ -190,7 +193,7 @@ export default function AppLayout() {
           />
           <NavItem
             to="/timetable"
-            label="Rozvrh"
+            label={t("nav.timetable")}
             icon={(c) => (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <rect x="2" y="3" width="12" height="11" rx="1.5" stroke={c} strokeWidth="1.3" />
@@ -200,7 +203,7 @@ export default function AppLayout() {
           />
           <NavItem
             to="/grades"
-            label="Známky"
+            label={t("nav.grades")}
             icon={(c) => (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <path d="M8 2L1 5.5l7 3.5 7-3.5L8 2z" stroke={c} strokeWidth="1.3" strokeLinejoin="round" />
@@ -210,7 +213,7 @@ export default function AppLayout() {
           />
           <NavItem
             to="/canteen"
-            label="Jedáleň"
+            label={t("nav.canteen")}
             icon={(c) => (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <path d="M4 2v4a3 3 0 006 0V2M7 2v4M7 9v5" stroke={c} strokeWidth="1.3" strokeLinecap="round" />
@@ -230,9 +233,23 @@ export default function AppLayout() {
             gap: 1,
           }}
         >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 10px 8px" }}>
+            <span
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 8,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: "rgba(232,220,199,0.28)",
+              }}
+            >
+              {t("lang.label")}
+            </span>
+            <LanguageSwitcher />
+          </div>
           <NavItem
             to="/settings"
-            label="Nastavenia"
+            label={t("nav.settings")}
             icon={(c) => (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
                 <circle cx="8" cy="8" r="2.5" stroke={c} strokeWidth="1.3" />
@@ -245,7 +262,7 @@ export default function AppLayout() {
               </svg>
             )}
           />
-          <LogoutButton onClick={handleLogout} />
+          <LogoutButton onClick={handleLogout} label={t("nav.logout")} />
         </div>
       </aside>
 
@@ -257,7 +274,7 @@ export default function AppLayout() {
   );
 }
 
-function LogoutButton({ onClick }: { onClick: () => void }) {
+function LogoutButton({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button
       type="button"
@@ -288,7 +305,7 @@ function LogoutButton({ onClick }: { onClick: () => void }) {
         />
       </svg>
       <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "rgba(200,120,120,0.45)" }}>
-        Odhlásiť sa
+        {label}
       </span>
     </button>
   );

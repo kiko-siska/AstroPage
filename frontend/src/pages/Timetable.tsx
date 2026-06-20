@@ -1,6 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, type DashboardPeriod, type TimetableDay, type TimetableWeek } from "../api/client";
-import { cachedFetch, peekCache } from "../api/cache";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
 const cacheKey = (offset: number) => `timetable:${offset}`;
 
@@ -17,19 +21,19 @@ function nowHm(): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function weekRangeLabel(weekStartIso: string): string {
+function weekRangeLabel(weekStartIso: string, locale: string): string {
   const mon = parseDay(weekStartIso);
   const fri = new Date(mon);
   fri.setDate(fri.getDate() + 4);
-  const fmt = (d: Date) => d.toLocaleDateString("sk-SK", { day: "numeric", month: "short" });
+  const fmt = (d: Date) => d.toLocaleDateString(locale, { day: "numeric", month: "short" });
   return `${fmt(mon)} – ${fmt(fri)}`;
 }
 
-function offsetLabel(offset: number): string {
-  if (offset === 0) return "Tento týždeň";
-  if (offset === 1) return "Budúci týždeň";
-  if (offset === -1) return "Minulý týždeň";
-  return offset > 0 ? `Za ${offset} týždne` : `Pred ${-offset} týždňami`;
+function offsetLabel(offset: number, t: Translate): string {
+  if (offset === 0) return t("timetable.thisWeek");
+  if (offset === 1) return t("timetable.nextWeek");
+  if (offset === -1) return t("timetable.lastWeek");
+  return offset > 0 ? t("timetable.inWeeks", { n: offset }) : t("timetable.weeksAgo", { n: -offset });
 }
 
 const eyebrow: React.CSSProperties = {
@@ -41,48 +45,47 @@ const eyebrow: React.CSSProperties = {
 };
 
 export default function TimetablePage() {
+  const { t, locale } = useT();
   const [offset, setOffset] = useState(0);
-  const [week, setWeek] = useState<TimetableWeek | null>(() => peekCache<TimetableWeek>(cacheKey(0)) ?? null);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    cachedFetch(cacheKey(offset), () => api.getTimetable(offset))
-      .then((data) => { if (!cancelled) { setWeek(data); setError(null); } })
-      .catch((err: { detail?: string }) => {
-        if (!cancelled) setError(err?.detail ?? "Nepodarilo sa načítať rozvrh z EduPage.");
-      });
-    return () => { cancelled = true; };
-  }, [offset]);
+  // One cache entry per week offset; auto-refreshes when stale + manual button.
+  const { data: week, refreshing, error, lastUpdated, refresh } = useCachedResource<TimetableWeek>(
+    cacheKey(offset),
+    () => api.getTimetable(offset),
+    { errorFallback: t("timetable.loadError") },
+  );
 
   // Show the skeleton until the loaded week matches the selected offset. Cache
-  // hits resolve on the next microtask, so this barely flashes when revisiting.
-  const loading = !error && (week === null || week.weekOffset !== offset);
+  // hits resolve synchronously, so this barely flashes when revisiting.
+  const loading = !error && (week == null || week.weekOffset !== offset);
 
   return (
     <div style={{ padding: "36px 40px" }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
         <div>
-          <div style={{ ...eyebrow, marginBottom: 6 }}>{offsetLabel(offset)}</div>
+          <div style={{ ...eyebrow, marginBottom: 6 }}>{offsetLabel(offset, t)}</div>
           <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em", lineHeight: 1 }}>
-            Rozvrh
+            {t("timetable.title")}
           </div>
         </div>
-        <WeekNav
-          label={week ? weekRangeLabel(week.weekStart) : "—"}
-          offset={offset}
-          onPrev={() => setOffset((o) => o - 1)}
-          onNext={() => setOffset((o) => o + 1)}
-          onToday={() => setOffset(0)}
-        />
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
+          <WeekNav
+            label={week ? weekRangeLabel(week.weekStart, locale) : "—"}
+            offset={offset}
+            onPrev={() => setOffset((o) => o - 1)}
+            onNext={() => setOffset((o) => o + 1)}
+            onToday={() => setOffset(0)}
+          />
+        </div>
       </div>
 
       {error ? (
         <div style={{ background: "rgba(90,40,40,0.2)", border: "1px solid rgba(90,40,40,0.35)", borderRadius: 10, padding: "48px 24px", textAlign: "center" }}>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{error}</p>
           <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>
-            Skúste znova alebo sa prihláste.
+            {t("common.retryOrLogin")}
           </p>
         </div>
       ) : loading || !week ? (
@@ -115,18 +118,19 @@ function WeekNav({
   onNext: () => void;
   onToday: () => void;
 }) {
+  const { t } = useT();
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {offset !== 0 && (
         <button type="button" onClick={onToday} style={pillBtn(false)}>
-          Dnes
+          {t("timetable.today")}
         </button>
       )}
-      <button type="button" onClick={onPrev} aria-label="Predchádzajúci týždeň" style={arrowBtn}>‹</button>
+      <button type="button" onClick={onPrev} aria-label={t("timetable.prevWeek")} style={arrowBtn}>‹</button>
       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: "#E8DCC7", letterSpacing: "0.04em", minWidth: 120, textAlign: "center" }}>
         {label}
       </span>
-      <button type="button" onClick={onNext} aria-label="Nasledujúci týždeň" style={arrowBtn}>›</button>
+      <button type="button" onClick={onNext} aria-label={t("timetable.nextWeekAria")} style={arrowBtn}>›</button>
     </div>
   );
 }
@@ -162,8 +166,9 @@ function pillBtn(active: boolean): React.CSSProperties {
 }
 
 function DayColumn({ day, isWeekViewable }: { day: TimetableDay; isWeekViewable: boolean }) {
+  const { t, locale } = useT();
   const d = parseDay(day.date);
-  const dayName = d.toLocaleDateString("sk-SK", { weekday: "long" }).toUpperCase();
+  const dayName = d.toLocaleDateString(locale, { weekday: "long" }).toUpperCase();
   const dateStr = `${d.getDate()}.${d.getMonth() + 1}.`;
   const isToday = isWeekViewable && day.date === todayIso();
 
@@ -188,9 +193,9 @@ function DayColumn({ day, isWeekViewable }: { day: TimetableDay; isWeekViewable:
       </div>
 
       {!day.available ? (
-        <Placeholder text="Nedostupné" />
+        <Placeholder text={t("timetable.unavailable")} />
       ) : sorted.length === 0 ? (
-        <Placeholder text="Žiadne hodiny" />
+        <Placeholder text={t("timetable.noLessons")} />
       ) : (
         <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           {sorted.map((p, i) => (
@@ -213,6 +218,7 @@ function Placeholder({ text }: { text: string }) {
 }
 
 function PeriodCard({ period, highlightNow }: { period: DashboardPeriod; highlightNow: boolean }) {
+  const { t } = useT();
   const hm = nowHm();
   const isNow = highlightNow && !period.isCancelled && period.start <= hm && hm <= period.end;
   const meta = [period.classroom, period.teacher].filter(Boolean).join(" · ");
@@ -244,12 +250,12 @@ function PeriodCard({ period, highlightNow }: { period: DashboardPeriod; highlig
         </span>
         {isNow && (
           <span style={{ flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 7, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 5px", borderRadius: 3, background: "#B08D57", color: "#0a0805" }}>
-            Teraz
+            {t("dashboard.now")}
           </span>
         )}
         {period.isCancelled && (
           <span style={{ flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: 7, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 5px", borderRadius: 3, background: "rgba(100,48,48,0.2)", color: "#c88888" }}>
-            Zrušená
+            {t("common.cancelled")}
           </span>
         )}
       </div>
