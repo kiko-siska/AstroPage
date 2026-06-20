@@ -101,6 +101,196 @@ export interface MealDayDTO {
   can_be_changed_until: string | null;
 }
 
+// ── Grades wire shapes (snake_case, nullable fields) ────────────────────────
+
+interface GradeDTO {
+  id: string;
+  value: string;
+  weight: number;
+  description: string;
+  date: string | null; // "YYYY-MM-DD"
+  max_points: number | null;
+}
+
+interface SubjectGradesDTO {
+  subject_name: string;
+  current_average: number | null;
+  is_points: boolean;
+  grades: GradeDTO[];
+}
+
+interface GradesResponseDTO {
+  subjects: SubjectGradesDTO[];
+}
+
+/** One official grade on a subject's report card. For points grades `value`
+ *  is the earned points and `maxPoints` the maximum (render as "value/max"). */
+export interface Grade {
+  id: string;
+  value: string;
+  weight: number;
+  description: string;
+  date: string | null;
+  maxPoints: number | null;
+}
+
+/** A subject with its grades and EduPage's average. When `isPoints` is true,
+ *  `currentAverage` is a percentage (0–100); otherwise a 1–5 weighted average. */
+export interface SubjectGrades {
+  subjectName: string;
+  currentAverage: number | null;
+  isPoints: boolean;
+  grades: Grade[];
+}
+
+function toSubjectGrades(dto: SubjectGradesDTO): SubjectGrades {
+  return {
+    subjectName: dto.subject_name,
+    currentAverage: dto.current_average,
+    isPoints: dto.is_points,
+    grades: dto.grades.map((g) => ({
+      id: g.id,
+      value: g.value,
+      weight: g.weight,
+      description: g.description,
+      date: g.date,
+      maxPoints: g.max_points,
+    })),
+  };
+}
+
+// ── Dashboard wire shapes ───────────────────────────────────────────────────
+
+interface PeriodDTO {
+  period: number | null;
+  start: string;
+  end: string;
+  subject: string;
+  classroom: string | null;
+  teacher: string | null;
+  is_cancelled: boolean;
+  curriculum: string | null;
+}
+
+interface DashboardSummaryDTO {
+  date: string;
+  pending_homework: number;
+  due_within_24h: number;
+  lessons_total: number;
+  lessons_cancelled: number;
+  schedule_available: boolean;
+  schedule: PeriodDTO[];
+}
+
+/** One timetable period on the dashboard. */
+export interface DashboardPeriod {
+  period: number | null;
+  start: string;
+  end: string;
+  subject: string;
+  classroom: string | null;
+  teacher: string | null;
+  isCancelled: boolean;
+  curriculum: string | null;
+}
+
+/** Live home-page summary: today's timetable + homework counts. */
+export interface DashboardSummary {
+  date: string;
+  pendingHomework: number;
+  dueWithin24h: number;
+  lessonsTotal: number;
+  lessonsCancelled: number;
+  scheduleAvailable: boolean;
+  schedule: DashboardPeriod[];
+}
+
+function toDashboardSummary(dto: DashboardSummaryDTO): DashboardSummary {
+  return {
+    date: dto.date,
+    pendingHomework: dto.pending_homework,
+    dueWithin24h: dto.due_within_24h,
+    lessonsTotal: dto.lessons_total,
+    lessonsCancelled: dto.lessons_cancelled,
+    scheduleAvailable: dto.schedule_available,
+    schedule: dto.schedule.map((p) => ({
+      period: p.period,
+      start: p.start,
+      end: p.end,
+      subject: p.subject,
+      classroom: p.classroom,
+      teacher: p.teacher,
+      isCancelled: p.is_cancelled,
+      curriculum: p.curriculum,
+    })),
+  };
+}
+
+// ── Timetable wire shapes ───────────────────────────────────────────────────
+
+interface TimetableDayDTO {
+  date: string;
+  available: boolean;
+  periods: PeriodDTO[];
+}
+
+interface TimetableWeekDTO {
+  week_start: string;
+  week_offset: number;
+  days: TimetableDayDTO[];
+}
+
+/** One weekday's lessons. `available` is false when EduPage couldn't load it. */
+export interface TimetableDay {
+  date: string;
+  available: boolean;
+  periods: DashboardPeriod[];
+}
+
+export interface TimetableWeek {
+  weekStart: string;
+  weekOffset: number;
+  days: TimetableDay[];
+}
+
+function toTimetableWeek(dto: TimetableWeekDTO): TimetableWeek {
+  return {
+    weekStart: dto.week_start,
+    weekOffset: dto.week_offset,
+    days: dto.days.map((d) => ({
+      date: d.date,
+      available: d.available,
+      periods: d.periods.map((p) => ({
+        period: p.period,
+        start: p.start,
+        end: p.end,
+        subject: p.subject,
+        classroom: p.classroom,
+        teacher: p.teacher,
+        isCancelled: p.is_cancelled,
+        curriculum: p.curriculum,
+      })),
+    })),
+  };
+}
+
+// ── AI homework draft wire shapes ───────────────────────────────────────────
+
+interface DraftResponseDTO {
+  assignment_id: string;
+  draft: string;
+  cached: boolean;
+  created_at: string;
+}
+
+/** An AI-generated homework draft (Gemini, produced server-side). */
+export interface AiDraft {
+  assignmentId: string;
+  draft: string;
+  cached: boolean;
+  createdAt: string;
+}
+
 export interface OrderResponseDTO {
   date: string;
   ordered_meal: string | null;
@@ -118,6 +308,10 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
+  getDashboard: async (): Promise<DashboardSummary> =>
+    toDashboardSummary(await request<DashboardSummaryDTO>("/dashboard/summary")),
+  getTimetable: async (offset = 0): Promise<TimetableWeek> =>
+    toTimetableWeek(await request<TimetableWeekDTO>(`/timetable/week?offset=${offset}`)),
   listHomework: async (): Promise<Homework[]> => {
     const items = await request<HomeworkItemDTO[]>("/homework/list");
     return items.map(toHomework);
@@ -129,6 +323,26 @@ export const api = {
       `/homework/${encodeURIComponent(id)}/done`,
       { method: "POST", body: JSON.stringify({ done }) },
     ),
+  // Ask the AI assistant (Gemini, backend-side) to draft this assignment. The
+  // backend pulls the assignment's attachment files and the student's custom
+  // prompt into the request; we only pass the id. `force` regenerates instead
+  // of returning a cached draft.
+  generateAiDraft: async (assignmentId: string, force = false): Promise<AiDraft> => {
+    const dto = await request<DraftResponseDTO>("/homework/generate-ai", {
+      method: "POST",
+      body: JSON.stringify({ assignment_id: assignmentId, force }),
+    });
+    return {
+      assignmentId: dto.assignment_id,
+      draft: dto.draft,
+      cached: dto.cached,
+      createdAt: dto.created_at,
+    };
+  },
+  listGrades: async (): Promise<SubjectGrades[]> => {
+    const body = await request<GradesResponseDTO>("/grades");
+    return body.subjects.map(toSubjectGrades);
+  },
   listMeals: (weeks = 3) => request<MealDayDTO[]>(`/canteen/meals?weeks=${weeks}`),
   // `choice` is a menu letter ("A", "B", …), or null to sign off the meal.
   orderMeal: (date: string, choice: string | null) =>

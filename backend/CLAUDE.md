@@ -13,25 +13,45 @@ app/
   main.py              # FastAPI app + lifespan + middleware
   core/
     config.py          # Settings (pydantic-settings, reads .env)
-    security.py        # HMAC signing helpers
+    security.py        # Fernet encryption, JWT helpers, HMAC
     logging.py         # Structured logging setup
   api/
-    deps.py            # Shared FastAPI dependencies
+    deps.py            # get_edupage_client, get_session, require_user
     v1/
       router.py        # Mounts all v1 endpoint routers
       endpoints/
-        items.py       # CRUD for Item resource
-  models/item.py       # Dataclass (domain model)
-  schemas/item.py      # Pydantic I/O schemas
+        auth.py        # /login, /logout, /me
+        dashboard.py   # /dashboard/summary
+        homework.py    # /homework, mark-done, generate-ai
+        timetable.py   # /timetable
+        grades.py      # /grades
+        canteen.py     # /canteen/meals, /canteen/order
+        settings.py    # /settings/ai-rules
+  models/
+    user.py            # User + Session (SQLModel tables)
+  schemas/             # Pydantic I/O schemas per resource
   services/
-    item_service.py    # Business logic + in-memory store
+    auth_service.py    # Session create/rehydrate/validate
+    edupage_service.py # async wrapper over edupage-api (all EduPage calls)
+    timetable_service.py
+    homework_service.py
+    canteen_service.py
+    grades_service.py
+    ai_service.py      # Gemini draft generation (gemini-2.5-flash)
+    settings_service.py
 
 agents/
   base_agent.py        # Reusable agentic loop (tool-use → observe → repeat)
   example_agent.py     # Calculator agent — run to verify agent wiring
 
+scripts/               # One-off PoC scripts for EduPage reverse-engineering
+  poc_timetable.py
+  poc_canteen_menu.py
+  poc_order_meal.py
+  poc_substitutions.py
+
 tests/
-  conftest.py          # Shared fixtures (TestClient, store reset)
+  conftest.py          # Shared fixtures (TestClient, mock EduPage)
   unit/                # Fast, isolated tests
   integration/         # Tests that exercise the full HTTP stack
 ```
@@ -75,4 +95,5 @@ See `.env.example`. Copy to `.env` before running locally.
 | `JWT_TTL_MINUTES`  | no       | Session lifetime (default 720)             |
 | `FERNET_KEY`       | yes (prod) | Encrypts EduPage cookies at rest; derived from `SECRET_KEY` if blank |
 | `FRONTEND_ORIGIN`  | no       | CORS-allowed origin (default `http://localhost:5173`) |
-| `ANTHROPIC_API_KEY`| AI/agents only | Required for the homework assistant and `agents/` |
+| `GEMINI_API_KEY`   | AI only  | Gemini API key for the homework assistant; offline template used if unset |
+| `ANTHROPIC_API_KEY`| agents only | Required for the `agents/` layer (not the FastAPI app) |

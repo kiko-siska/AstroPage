@@ -1,10 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { BrainCircuit, Check, ShieldCheck, UserRound } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-
-const DEFAULT_PROMPT =
-  "You are a study assistant. Draft and explain solutions step by step so I can " +
-  "learn from them — never just hand me a final answer.";
+import { useT } from "../i18n/LanguageContext";
 
 interface AiRules {
   systemPrompt: string;
@@ -15,14 +11,13 @@ interface AiRules {
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  // Kept in memory only for now; a real implementation persists via the API,
-  // never localStorage.
-  const [rules, setRules] = useState<AiRules>({
-    systemPrompt: DEFAULT_PROMPT,
+  const { t } = useT();
+  const [rules, setRules] = useState<AiRules>(() => ({
+    systemPrompt: t("settings.defaultPrompt"),
     stepByStep: true,
     simpleLanguage: false,
     citeSources: true,
-  });
+  }));
   const [saved, setSaved] = useState(false);
 
   function handleSave(e: FormEvent) {
@@ -32,167 +27,238 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8 lg:px-10">
-      <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-white">Settings</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Tune the AI assistant and review your account details.
-        </p>
-      </header>
+    <div style={{ padding: "36px 40px", maxWidth: 680 }}>
+      {/* Header */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
+          {t("settings.accountAi")}
+        </div>
+        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em" }}>
+          {t("settings.title")}
+        </div>
+      </div>
 
-      {/* AI rules */}
+      {/* AI panel */}
       <form
         onSubmit={handleSave}
-        className="mb-8 rounded-xl border border-slate-800 bg-slate-900/60 p-6"
-        aria-labelledby="ai-rules-heading"
+        style={{
+          background: "#161208",
+          border: "1px solid rgba(176,141,87,0.14)",
+          borderRadius: 12,
+          padding: 24,
+          marginBottom: 14,
+        }}
       >
-        <div className="mb-5 flex items-center gap-3">
-          <span className="grid size-10 place-items-center rounded-lg bg-violet-500/15 text-violet-300">
-            <BrainCircuit className="size-5" aria-hidden />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="3" stroke="#B08D57" strokeWidth="1.2" />
+            <path d="M8 1v1.5M8 13.5V15M15 8h-1.5M2.5 8H1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1M12.6 12.6l-1.1-1.1M4.5 4.5L3.4 3.4" stroke="#B08D57" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+          <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: "#E8DCC7" }}>
+            {t("settings.aiRules")}
           </span>
-          <div>
-            <h2 id="ai-rules-heading" className="font-semibold text-white">
-              AI Assistant Rules
-            </h2>
-            <p className="text-xs text-slate-500">
-              Applied to every homework draft the assistant generates.
-            </p>
-          </div>
         </div>
 
-        <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-slate-300">
-            Custom system prompt
-          </span>
-          <textarea
-            value={rules.systemPrompt}
-            onChange={(e) => setRules((r) => ({ ...r, systemPrompt: e.target.value }))}
-            rows={4}
-            className="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm leading-relaxed text-white placeholder-slate-600 transition focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
-          />
-          <span className="mt-1 block text-xs text-slate-500">
-            The study-assistant constraint (draft &amp; explain, never final answers) is always
-            appended and cannot be removed.
-          </span>
-        </label>
-
-        <div className="mt-5 space-y-3">
-          <Toggle
-            label="Explain step by step"
-            description="Drafts include reasoning for every step, not just results."
-            checked={rules.stepByStep}
-            onChange={(v) => setRules((r) => ({ ...r, stepByStep: v }))}
-          />
-          <Toggle
-            label="Use simpler language"
-            description="Prefer shorter sentences and everyday vocabulary."
-            checked={rules.simpleLanguage}
-            onChange={(v) => setRules((r) => ({ ...r, simpleLanguage: v }))}
-          />
-          <Toggle
-            label="Cite sources"
-            description="Include references for facts used in the draft."
-            checked={rules.citeSources}
-            onChange={(v) => setRules((r) => ({ ...r, citeSources: v }))}
-          />
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
+          {t("settings.promptLabel")}
+        </div>
+        <textarea
+          rows={4}
+          value={rules.systemPrompt}
+          onChange={(e) => setRules((r) => ({ ...r, systemPrompt: e.target.value }))}
+          style={{ width: "100%", padding: 12, fontFamily: "'Inter', sans-serif", fontSize: 13, lineHeight: 1.6, resize: "vertical" }}
+        />
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.28)", marginTop: 6, marginBottom: 18 }}>
+          {t("settings.promptNote")}
         </div>
 
-        <div className="mt-6 flex items-center gap-3">
+        <Toggle
+          label={t("settings.presetStepByStep")}
+          description={t("settings.presetStepByStepDesc")}
+          checked={rules.stepByStep}
+          onChange={(v) => setRules((r) => ({ ...r, stepByStep: v }))}
+        />
+        <Toggle
+          label={t("settings.presetSimpler")}
+          description={t("settings.presetSimplerDesc")}
+          checked={rules.simpleLanguage}
+          onChange={(v) => setRules((r) => ({ ...r, simpleLanguage: v }))}
+        />
+        <Toggle
+          label={t("settings.presetCite")}
+          description={t("settings.presetCiteDesc")}
+          checked={rules.citeSources}
+          onChange={(v) => setRules((r) => ({ ...r, citeSources: v }))}
+        />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
           <button
             type="submit"
-            className="cursor-pointer rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+            style={{
+              background: "#B08D57",
+              color: "#0a0805",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              fontWeight: 500,
+              padding: "10px 16px",
+              borderRadius: 6,
+              border: "none",
+              cursor: "pointer",
+              transition: "background 0.2s",
+            }}
           >
-            Save AI rules
+            {t("settings.save")}
           </button>
-          <span
-            aria-live="polite"
-            className={[
-              "flex items-center gap-1.5 text-sm text-emerald-300 transition-opacity duration-300",
-              saved ? "opacity-100" : "opacity-0",
-            ].join(" ")}
-          >
-            <Check className="size-4" aria-hidden />
-            Saved
-          </span>
+          {saved && (
+            <span
+              aria-live="polite"
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 9,
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: "#88c8a0",
+              }}
+            >
+              ✓ {t("settings.saved")}
+            </span>
+          )}
         </div>
       </form>
 
-      {/* Account metadata */}
-      <section
-        className="rounded-xl border border-slate-800 bg-slate-900/60 p-6"
-        aria-labelledby="account-heading"
+      {/* Account panel */}
+      <div
+        style={{
+          background: "#161208",
+          border: "1px solid rgba(176,141,87,0.14)",
+          borderRadius: 12,
+          padding: 24,
+        }}
       >
-        <div className="mb-5 flex items-center gap-3">
-          <span className="grid size-10 place-items-center rounded-lg bg-sky-500/15 text-sky-300">
-            <UserRound className="size-5" aria-hidden />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="6" r="3" stroke="#B08D57" strokeWidth="1.2" />
+            <path d="M2 14c0-3 2.7-5 6-5s6 2 6 5" stroke="#B08D57" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+          <span style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: "#E8DCC7" }}>
+            {t("settings.account")}
           </span>
-          <div>
-            <h2 id="account-heading" className="font-semibold text-white">
-              Account
-            </h2>
-            <p className="text-xs text-slate-500">Linked EduPage identity.</p>
-          </div>
         </div>
 
-        <dl className="divide-y divide-slate-800 text-sm">
-          <MetaRow label="Username" value={user?.username ?? "—"} />
-          <MetaRow label="School" value={`${user?.subdomain ?? "—"}.edupage.org`} />
-          <MetaRow label="Session" value="Encrypted server-side session (HttpOnly cookie)" />
-        </dl>
+        <MetaRow label={t("login.username")} value={user?.username ?? "—"} />
+        <MetaRow label={t("common.school")} value={`${user?.subdomain ?? "—"}.edupage.org`} />
+        <MetaRow label={t("settings.session")} value={t("settings.sessionValue")} />
 
-        <p className="mt-5 flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-xs text-emerald-300">
-          <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden />
-          Your EduPage password is never stored. To change it, use EduPage directly — AstroPage
-          only proxies your session.
-        </p>
-      </section>
+        <div
+          style={{
+            marginTop: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "rgba(60,100,72,0.1)",
+            border: "1px solid rgba(60,100,72,0.22)",
+            borderRadius: 6,
+            padding: "10px 14px",
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1L1 5v3c0 3 2.5 5 6 5s6-2 6-5V5L7 1z" stroke="#88c8a0" strokeWidth="1.2" />
+            <path d="M4.5 7l1.5 1.5L9.5 5" stroke="#88c8a0" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "#88c8a0" }}>
+            {t("settings.passwordNever")}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
 
-interface ToggleProps {
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
   label: string;
   description: string;
   checked: boolean;
   onChange: (v: boolean) => void;
-}
-
-function Toggle({ label, description, checked, onChange }: ToggleProps) {
+}) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="flex w-full cursor-pointer items-center justify-between gap-4 rounded-lg border border-slate-800 px-4 py-3 text-left transition-colors duration-200 hover:border-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "12px 0",
+        borderTop: "1px solid rgba(176,141,87,0.1)",
+        gap: 16,
+      }}
     >
-      <span>
-        <span className="block text-sm font-medium text-slate-200">{label}</span>
-        <span className="mt-0.5 block text-xs text-slate-500">{description}</span>
-      </span>
-      <span
-        aria-hidden
-        className={[
-          "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200",
-          checked ? "bg-violet-600" : "bg-slate-700",
-        ].join(" ")}
+      <div>
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 500, color: "#E8DCC7", marginBottom: 2 }}>
+          {label}
+        </div>
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.38)" }}>
+          {description}
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        style={{
+          width: 36,
+          height: 20,
+          borderRadius: 10,
+          background: checked ? "#B08D57" : "rgba(232,220,199,0.1)",
+          position: "relative",
+          cursor: "pointer",
+          flexShrink: 0,
+          border: "none",
+          transition: "background 0.2s",
+          padding: 0,
+        }}
       >
         <span
-          className={[
-            "absolute top-0.5 size-5 rounded-full bg-white transition-transform duration-200",
-            checked ? "translate-x-[22px]" : "translate-x-0.5",
-          ].join(" ")}
+          style={{
+            position: "absolute",
+            top: 2,
+            left: checked ? 18 : 2,
+            width: 16,
+            height: 16,
+            borderRadius: "50%",
+            background: "#fff",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+            transition: "left 0.2s",
+          }}
         />
-      </span>
-    </button>
+      </button>
+    </div>
   );
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-3">
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="text-right font-medium text-slate-200">{value}</dd>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "110px 1fr",
+        gap: 10,
+        padding: "11px 0",
+        borderTop: "1px solid rgba(176,141,87,0.1)",
+      }}
+    >
+      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.45)" }}>
+        {label}
+      </span>
+      <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "rgba(232,220,199,0.7)" }}>
+        {value}
+      </span>
     </div>
   );
 }

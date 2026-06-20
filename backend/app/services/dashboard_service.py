@@ -1,16 +1,31 @@
 """Aggregates EduPage data into the home-dashboard summary."""
 
+import logging
 from datetime import date, datetime, timedelta
 
 from edupage_api import Edupage
 
 from app.schemas.dashboard import DashboardSummary, PeriodOut
 from app.services import edupage_service
+from app.services.edupage_service import EduPageDataError
+
+logger = logging.getLogger("app.dashboard")
 
 
 async def build_summary(edupage: Edupage, day: date | None = None) -> DashboardSummary:
     day = day or date.today()
-    periods = await edupage_service.fetch_timetable(edupage, day)
+
+    # The timetable scrape is the flakiest EduPage call (it depends on a plan
+    # existing for the day and on page structure). Don't let it sink the whole
+    # dashboard — degrade to an empty schedule and still show homework counts.
+    try:
+        periods = await edupage_service.fetch_timetable(edupage, day)
+        schedule_available = True
+    except EduPageDataError:
+        logger.warning("dashboard: timetable unavailable for %s", day)
+        periods = []
+        schedule_available = False
+
     assignments = await edupage_service.fetch_homework(edupage)
 
     now = datetime.now()
@@ -24,6 +39,7 @@ async def build_summary(edupage: Edupage, day: date | None = None) -> DashboardS
         due_within_24h=len(due_soon),
         lessons_total=len(periods),
         lessons_cancelled=sum(1 for p in periods if p.is_cancelled),
+        schedule_available=schedule_available,
         schedule=[
             PeriodOut(
                 period=p.period,

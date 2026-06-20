@@ -1,22 +1,24 @@
-"""AI homework draft generation.
+"""AI homework draft generation using Google Gemini.
 
-Dispatches the assignment to Claude and returns a markdown draft. The
-study-assistant constraint is always part of the system prompt and the output
-is always a draft for the student to review — never a finished submission.
-Falls back to a deterministic template when no ANTHROPIC_API_KEY is configured
-so the rest of the stack stays demoable.
+Accepts the assignment text and optional attachment bytes (PDFs, images) as
+context and returns a markdown draft for student review. Falls back to an
+offline template when no GEMINI_API_KEY is configured.
 """
 
 import logging
 
-import anthropic
+from google import genai
+from google.genai import types
 
 from app.core.config import settings
 
 logger = logging.getLogger("app.ai")
 
-MODEL = "claude-opus-4-8"
-MAX_TOKENS = 16000
+MODEL = "gemini-2.5-flash"
+MAX_OUTPUT_TOKENS = 8192
+# Inline data limit for Gemini; files larger than this are skipped.
+_MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+_MAX_ASSIGNMENT_CHARS = 50_000
 
 # Core product constraint (see CLAUDE.md): draft and explain, never just a
 # final answer. Always appended; the user's custom prompt cannot remove it.
@@ -29,8 +31,8 @@ STUDY_ASSISTANT_CONSTRAINT = (
     "student must always review and own the final submission."
 )
 
-# Keep the compiled payload bounded (project rule: stay well under 100k tokens).
-_MAX_ASSIGNMENT_CHARS = 50_000
+# MIME types Gemini can process inline; anything else is skipped.
+_SUPPORTED_MIME_PREFIXES = ("image/", "application/pdf", "text/")
 
 
 class AiUnavailableError(Exception):
@@ -65,7 +67,7 @@ def _fallback_draft(subject: str | None, title: str, description: str) -> str:
     """Deterministic offline draft so the flow works without an API key."""
     return (
         f"# {title} — Draft\n\n"
-        "> AI generation is not configured on this server (no `ANTHROPIC_API_KEY`), "
+        "> AI generation is not configured on this server (no `GEMINI_API_KEY`), "
         "so this is a structured starting template.\n\n"
         "## Understanding the task\n"
         f"{description.strip()[:2000]}\n\n"
@@ -84,32 +86,49 @@ async def generate_draft(
     title: str,
     description: str,
     custom_prompt: str | None,
+    attachments: list[tuple[bytes, str]] | None = None,
 ) -> str:
-    """Generate a markdown homework draft. Raises AiUnavailableError on provider failure."""
-    if not settings.anthropic_api_key:
-        logger.info("ai draft: no API key configured, returning fallback template")
+    """Generate a markdown homework draft.
+
+    attachments: list of (file_bytes, mime_type) pairs included as context.
+    Files exceeding 20 MB or with unsupported MIME types are silently skipped.
+    Raises AiUnavailableError on provider failure.
+    """
+    if not settings.gemini_api_key:
+        logger.info("ai draft: no GEMINI_API_KEY configured, returning fallback template")
         return _fallback_draft(subject, title, description)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = genai.Client(api_key=settings.gemini_api_key)
+
+    # Attachment parts first so the model sees the files before the question.
+    parts: list[types.Part] = []
+    for file_bytes, mime_type in attachments or []:
+        if len(file_bytes) > _MAX_FILE_BYTES:
+            logger.debug("ai draft: skipping attachment >20 MB mime=%s", mime_type)
+            continue
+        if not any(mime_type.startswith(p) for p in _SUPPORTED_MIME_PREFIXES):
+            logger.debug("ai draft: skipping unsupported mime=%s", mime_type)
+            continue
+        parts.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+
+    parts.append(types.Part.from_text(text=_build_user_message(subject, title, description)))
+
+    config = types.GenerateContentConfig(
+        system_instruction=build_system_prompt(custom_prompt),
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+    )
+
     try:
-        response = await client.messages.create(
+        response = await client.aio.models.generate_content(
             model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=build_system_prompt(custom_prompt),
-            messages=[
-                {"role": "user", "content": _build_user_message(subject, title, description)}
-            ],
+            contents=parts,
+            config=config,
         )
-    except anthropic.RateLimitError:
-        raise AiUnavailableError("The AI assistant is busy right now. Try again in a minute.")
-    except anthropic.APIError as exc:
-        logger.warning("anthropic API error: %s", type(exc).__name__)
+    except Exception as exc:
+        logger.warning("gemini API error: %s %s", type(exc).__name__, str(exc)[:200])
         raise AiUnavailableError("The AI assistant is unavailable right now. Try again later.")
 
-    if response.stop_reason == "refusal":
-        raise AiUnavailableError("The AI assistant declined to draft this assignment.")
-
-    draft = "".join(block.text for block in response.content if block.type == "text").strip()
+    draft = (response.text or "").strip()
     if not draft:
         raise AiUnavailableError("The AI assistant returned an empty draft. Try again.")
     return draft

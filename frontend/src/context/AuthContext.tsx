@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api, type LoginPayload } from "../api/client";
+import { clearCache } from "../api/cache";
+import { prefetchAll } from "../api/prefetch";
 
 interface AuthUser {
   username: string;
@@ -23,10 +25,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (payload: LoginPayload) => {
     const res = await api.login(payload);
     setUser({ username: res.username, subdomain: res.subdomain });
+    // Warm every page's cache in the background (dashboard first). Fire-and-
+    // forget: never block the login transition on it, never surface its errors.
+    void prefetchAll();
   }, []);
 
   const logout = useCallback(async () => {
     await api.logout();
+    clearCache();
     setUser(null);
   }, []);
 

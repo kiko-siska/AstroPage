@@ -56,12 +56,36 @@ def test_summary_aggregates_metrics(auth_client, monkeypatch):
     assert body["schedule"][1]["is_cancelled"] is True
 
 
-def test_summary_maps_edupage_failure_to_502(auth_client, monkeypatch):
+def test_summary_degrades_when_timetable_unavailable(auth_client, monkeypatch):
+    # A flaky timetable must not sink the whole dashboard — homework still shows
+    # and the schedule reports as unavailable rather than "no lessons".
     async def boom(edupage, day):
         raise edupage_service.EduPageDataError("timetable_failed", "Could not load the timetable.")
 
+    async def fake_homework(edupage):
+        return [_assignment("1", due_in_hours=5)]
+
     monkeypatch.setattr(edupage_service, "fetch_timetable", boom)
+    monkeypatch.setattr(edupage_service, "fetch_homework", fake_homework)
+
+    res = auth_client.get("/api/v1/dashboard/summary")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["schedule_available"] is False
+    assert body["lessons_total"] == 0
+    assert body["schedule"] == []
+    assert body["pending_homework"] == 1
+
+
+def test_summary_homework_failure_is_502(auth_client, monkeypatch):
+    async def fake_timetable(edupage, day):
+        return []
+
+    async def boom(edupage):
+        raise edupage_service.EduPageDataError("homework_failed", "Could not load homework.")
+
+    monkeypatch.setattr(edupage_service, "fetch_timetable", fake_timetable)
+    monkeypatch.setattr(edupage_service, "fetch_homework", boom)
 
     res = auth_client.get("/api/v1/dashboard/summary")
     assert res.status_code == 502
-    assert "timetable" in res.json()["detail"].lower()

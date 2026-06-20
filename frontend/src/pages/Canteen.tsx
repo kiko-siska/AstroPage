@@ -1,38 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  CircleCheck,
-  CircleSlash,
-  LoaderCircle,
-  Soup,
-  Sparkles,
-  X,
-} from "lucide-react";
-import { api, type MealDayDTO } from "../api/client";
+import { api, type MealDayDTO, type MenuOptionDTO } from "../api/client";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
+
+type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
 const WEEKS_AHEAD = 3;
+const MEALS_CACHE_KEY = `canteen:meals:${WEEKS_AHEAD}`;
 
-// EduPage dates are plain "YYYY-MM-DD"; parse as local midnight so the weekday
-// label doesn't shift across timezones.
 function parseDay(iso: string): Date {
   return new Date(`${iso}T00:00:00`);
 }
 
-/** Monday 00:00 of the given date's week, as a "YYYY-MM-DD" key. */
 function weekKey(iso: string): string {
   const d = parseDay(iso);
-  const offset = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
+  const offset = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - offset);
   return d.toISOString().slice(0, 10);
 }
 
-function weekLabel(key: string): string {
+function weekLabel(key: string, t: Translate): string {
   const thisMonday = weekKey(new Date().toISOString().slice(0, 10));
   const diffWeeks = Math.round(
     (parseDay(key).getTime() - parseDay(thisMonday).getTime()) / (7 * 24 * 60 * 60 * 1000),
   );
-  if (diffWeeks <= 0) return "This Week";
-  if (diffWeeks === 1) return "Next Week";
-  return `In ${diffWeeks} Weeks`;
+  if (diffWeeks <= 0) return t("canteen.thisWeek");
+  if (diffWeeks === 1) return t("canteen.nextWeek");
+  return t("canteen.inWeeks", { n: diffWeeks });
 }
 
 interface Week {
@@ -41,7 +36,7 @@ interface Week {
   days: MealDayDTO[];
 }
 
-function groupByWeek(meals: MealDayDTO[]): Week[] {
+function groupByWeek(meals: MealDayDTO[], t: Translate): Week[] {
   const buckets = new Map<string, MealDayDTO[]>();
   for (const meal of meals) {
     const key = weekKey(meal.date);
@@ -51,7 +46,7 @@ function groupByWeek(meals: MealDayDTO[]): Week[] {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, days]) => ({
       key,
-      label: weekLabel(key),
+      label: weekLabel(key, t),
       days: days.sort((a, b) => a.date.localeCompare(b.date)),
     }));
 }
@@ -59,53 +54,29 @@ function groupByWeek(meals: MealDayDTO[]): Week[] {
 type Toast = { tone: "error" | "success"; message: string } | null;
 
 export default function CanteenPage() {
-  const [meals, setMeals] = useState<MealDayDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useT();
+  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const { data, loading, refreshing, error, lastUpdated, refresh, mutate } =
+    useCachedResource<MealDayDTO[]>(MEALS_CACHE_KEY, () => api.listMeals(WEEKS_AHEAD), {
+      errorFallback: t("canteen.loadError"),
+    });
+  const meals = useMemo(() => data ?? [], [data]);
   const [activeWeek, setActiveWeek] = useState<string | null>(null);
-  // Dates with an in-flight order request — used to disable their controls.
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
-
-  // Bulk-automation controls.
   const [bulkDays, setBulkDays] = useState(5);
   const [bulkChoice, setBulkChoice] = useState("A");
 
-  function loadMeals(signal?: { cancelled: boolean }) {
-    return api
-      .listMeals(WEEKS_AHEAD)
-      .then((data) => {
-        if (signal?.cancelled) return;
-        setMeals(data);
-        setActiveWeek((cur) => cur ?? groupByWeek(data)[0]?.key ?? null);
-      })
-      .catch((err: { detail?: string }) => {
-        if (!signal?.cancelled) setError(err?.detail ?? "Could not load canteen menus from EduPage.");
-      });
-  }
-
-  useEffect(() => {
-    const signal = { cancelled: false };
-    loadMeals(signal).finally(() => {
-      if (!signal.cancelled) setLoading(false);
-    });
-    return () => {
-      signal.cancelled = true;
-    };
-  }, []);
-
-  // Auto-dismiss toasts.
   useEffect(() => {
     if (!toast) return;
-    const id = setTimeout(() => setToast(null), 4000);
+    const id = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(id);
   }, [toast]);
 
-  const weeks = useMemo(() => groupByWeek(meals), [meals]);
+  const weeks = useMemo(() => groupByWeek(meals, t), [meals, t]);
   const week = weeks.find((w) => w.key === activeWeek) ?? weeks[0];
 
-  // Menu letters offered anywhere in the dataset — drives the bulk dropdown.
   const letters = useMemo(() => {
     const set = new Set<string>();
     for (const m of meals) for (const o of m.options) set.add(o.letter);
@@ -113,32 +84,26 @@ export default function CanteenPage() {
   }, [meals]);
 
   function setOrdered(date: string, ordered: string | null) {
-    setMeals((prev) => prev.map((m) => (m.date === date ? { ...m, ordered_meal: ordered } : m)));
+    // `mutate` (updater form) keeps the on-screen list and cache in sync and is
+    // race-safe when several days are changed in quick succession.
+    mutate((prev) => (prev ?? []).map((m) => (m.date === date ? { ...m, ordered_meal: ordered } : m)));
   }
 
   function markPending(date: string, on: boolean) {
-    setPending((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(date);
-      else next.delete(date);
-      return next;
-    });
+    setPending((prev) => { const next = new Set(prev); if (on) next.add(date); else next.delete(date); return next; });
   }
 
-  // Optimistically apply an order/sign-off, rolling back on failure.
   async function changeMeal(date: string, choice: string | null) {
     const previous = meals.find((m) => m.date === date)?.ordered_meal ?? null;
     if (previous === choice) return;
-
     setOrdered(date, choice);
     markPending(date, true);
     try {
       const res = await api.orderMeal(date, choice);
-      setOrdered(date, res.ordered_meal); // trust the server's view
+      setOrdered(date, res.ordered_meal);
     } catch (err) {
-      setOrdered(date, previous); // roll back
-      const detail = (err as { detail?: string })?.detail ?? "Could not update that meal.";
-      setToast({ tone: "error", message: detail });
+      setOrdered(date, previous);
+      setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? t("canteen.orderError") });
     } finally {
       markPending(date, false);
     }
@@ -148,44 +113,64 @@ export default function CanteenPage() {
     setBulkBusy(true);
     try {
       const res = await api.bulkSignup(bulkDays, bulkChoice);
-      await loadMeals(); // re-sync so newly-ordered days flip together
-      setToast({
-        tone: "success",
-        message: `Scheduled ${res.updated_days} day${res.updated_days === 1 ? "" : "s"} for Menu ${bulkChoice}${
-          res.skipped_days ? ` · ${res.skipped_days} skipped` : ""
-        }.`,
-      });
+      refresh(); // bulk changed server state — force a fresh meals fetch
+      if (res.updated_days === 0) {
+        // Nothing actually landed on EduPage — usually every day was already
+        // ordered, closed, or past its ordering window. Don't fake success.
+        const skipped = res.skipped_days ? t("canteen.bulkNoneSkipped", { n: res.skipped_days }) : "";
+        setToast({ tone: "error", message: t("canteen.bulkNone", { skipped }) });
+      } else {
+        const skipped = res.skipped_days ? t("canteen.bulkOkSkipped", { n: res.skipped_days }) : "";
+        setToast({
+          tone: "success",
+          message: t("canteen.bulkOk", { updated: res.updated_days, choice: bulkChoice, skipped }),
+        });
+      }
     } catch (err) {
-      const detail = (err as { detail?: string })?.detail ?? "Auto-scheduling failed.";
-      setToast({ tone: "error", message: detail });
+      setToast({ tone: "error", message: (err as { detail?: string })?.detail ?? t("canteen.bulkError") });
     } finally {
       setBulkBusy(false);
     }
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8 lg:px-10">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-white">School Canteen</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Pick your menus and manage meal sign-ups for the weeks ahead.
-        </p>
-      </header>
-
-      {/* Bulk automation control suite */}
-      <div className="mb-6 flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:flex-row sm:items-end sm:justify-between">
+    <div style={{ padding: "36px 40px" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
         <div>
-          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-white">
-            <Sparkles className="size-4 text-violet-400" aria-hidden />
-            Bulk Automation
-          </h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Auto-register for your preferred menu several days ahead.
-          </p>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
+            {t("canteen.eyebrow")}
+          </div>
+          <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em" }}>
+            {t("canteen.title")}
+          </div>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="text-xs font-medium text-slate-400">
-            Days ahead
+        <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
+      </div>
+
+      {/* Bulk automation */}
+      <div
+        style={{
+          background: "#161208",
+          border: "1px solid rgba(176,141,87,0.18)",
+          borderRadius: 10,
+          padding: "20px 22px",
+          marginBottom: 24,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1l1.4 3.5L12 5 9.7 7.3l.8 3.7L7 9.5 3.5 11l.8-3.7L2 5l3.6-.5L7 1z" stroke="#B08D57" strokeWidth="1.2" strokeLinejoin="round" />
+          </svg>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "#B08D57" }}>
+            {t("canteen.autoOrder")}
+          </span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
+          <div>
+            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 5 }}>
+              {t("canteen.daysCount")}
+            </div>
             <input
               type="number"
               min={1}
@@ -193,88 +178,104 @@ export default function CanteenPage() {
               value={bulkDays}
               disabled={bulkBusy}
               onChange={(e) => setBulkDays(Math.min(31, Math.max(1, Number(e.target.value) || 1)))}
-              className="mt-1 block w-20 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+              style={{ width: "100%", padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}
             />
-          </label>
-          <label className="text-xs font-medium text-slate-400">
-            Preferred menu
+          </div>
+          <div>
+            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 5 }}>
+              {t("canteen.preferredMenu")}
+            </div>
             <select
               value={bulkChoice}
               disabled={bulkBusy}
               onChange={(e) => setBulkChoice(e.target.value)}
-              className="mt-1 block rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+              style={{ width: "100%", padding: "9px 11px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13 }}
             >
               {letters.map((l) => (
-                <option key={l} value={l}>
-                  Menu {l}
-                </option>
+                <option key={l} value={l}>{t("canteen.menu", { letter: l })}</option>
               ))}
             </select>
-          </label>
+          </div>
           <button
             type="button"
             onClick={runBulk}
             disabled={bulkBusy || loading || !!error}
-            className="flex cursor-pointer items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
+            style={{
+              background: bulkBusy ? "rgba(176,141,87,0.5)" : "#B08D57",
+              color: "#0a0805",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+              fontWeight: 500,
+              padding: "10px 14px",
+              borderRadius: 6,
+              border: "none",
+              cursor: bulkBusy ? "not-allowed" : "pointer",
+              whiteSpace: "nowrap",
+              transition: "background 0.2s",
+            }}
           >
-            {bulkBusy ? <LoaderCircle className="size-4 animate-spin" aria-hidden /> : <Sparkles className="size-4" aria-hidden />}
-            Auto-Schedule Meals
+            {bulkBusy ? t("canteen.running") : t("canteen.run")}
           </button>
         </div>
       </div>
 
       {error ? (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-red-300">{error}</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Try reloading, or log in again if your session expired.
-          </p>
+        <div style={{ background: "rgba(90,40,40,0.2)", border: "1px solid rgba(90,40,40,0.35)", borderRadius: 10, padding: "48px 24px", textAlign: "center" }}>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{error}</p>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>{t("common.retryOrLogin")}</p>
         </div>
       ) : loading ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
           {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} className="h-72 animate-pulse rounded-xl border border-slate-800 bg-slate-900/60" />
+            <div key={i} style={{ height: 288, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
           ))}
         </div>
       ) : !week ? (
-        <div className="rounded-xl border border-dashed border-slate-800 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-slate-300">No menus available.</p>
-          <p className="mt-1 text-xs text-slate-500">EduPage didn't return any upcoming meals.</p>
+        <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
+          <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(232,220,199,0.28)", margin: 0 }}>
+            {t("canteen.noMenu")}
+          </p>
         </div>
       ) : (
         <>
-          {/* Week picker */}
-          <div
-            className="mb-6 flex gap-1.5 rounded-xl border border-slate-800 bg-slate-900/60 p-1.5 sm:w-fit"
-            role="tablist"
-            aria-label="Week"
-          >
-            {weeks.map((w) => (
-              <button
-                key={w.key}
-                type="button"
-                role="tab"
-                aria-selected={w.key === week.key}
-                onClick={() => setActiveWeek(w.key)}
-                className={[
-                  "flex-1 cursor-pointer whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200 sm:flex-none",
-                  w.key === week.key
-                    ? "bg-violet-600 text-white"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-200",
-                ].join(" ")}
-              >
-                {w.label}
-              </button>
-            ))}
+          {/* Week tabs */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+            {weeks.map((w) => {
+              const active = w.key === week.key;
+              return (
+                <button
+                  key={w.key}
+                  type="button"
+                  onClick={() => setActiveWeek(w.key)}
+                  style={{
+                    padding: "7px 14px",
+                    borderRadius: 6,
+                    background: active ? "rgba(176,141,87,0.12)" : "transparent",
+                    border: `1px solid ${active ? "rgba(176,141,87,0.3)" : "rgba(176,141,87,0.12)"}`,
+                    cursor: "pointer",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 9,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    color: active ? "#B08D57" : "rgba(232,220,199,0.3)",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {w.label}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Menu grid: Mon–Fri */}
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {/* Day grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
             {week.days.map((day) => (
               <DayCard
                 key={day.date}
                 day={day}
-                pending={pending.has(day.date)}
+                isPending={pending.has(day.date)}
                 onChange={(choice) => changeMeal(day.date, choice)}
               />
             ))}
@@ -282,29 +283,44 @@ export default function CanteenPage() {
         </>
       )}
 
+      {/* Toast */}
       {toast && (
         <div
           role="status"
-          className={[
-            "fixed bottom-6 left-1/2 z-50 flex max-w-md -translate-x-1/2 items-center gap-3 rounded-xl border px-4 py-3 text-sm shadow-2xl",
-            toast.tone === "error"
-              ? "border-red-500/40 bg-red-500/15 text-red-200"
-              : "border-emerald-500/40 bg-emerald-500/15 text-emerald-200",
-          ].join(" ")}
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 200,
+            background: "#161208",
+            border: "1px solid rgba(176,141,87,0.28)",
+            borderRadius: 8,
+            padding: "11px 18px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            transition: "opacity 0.3s",
+          }}
         >
-          {toast.tone === "error" ? (
-            <CircleSlash className="size-4 shrink-0" aria-hidden />
-          ) : (
-            <CircleCheck className="size-4 shrink-0" aria-hidden />
-          )}
-          <span className="min-w-0">{toast.message}</span>
+          <span
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10,
+              letterSpacing: "0.12em",
+              color: toast.tone === "success" ? "#88c8a0" : "#c88888",
+            }}
+          >
+            {toast.message}
+          </span>
           <button
             type="button"
             onClick={() => setToast(null)}
-            aria-label="Dismiss"
-            className="ml-1 cursor-pointer rounded text-current/70 hover:text-current"
+            style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(232,220,199,0.4)", padding: 0, fontSize: 12 }}
           >
-            <X className="size-4" aria-hidden />
+            ✕
           </button>
         </div>
       )}
@@ -312,133 +328,149 @@ export default function CanteenPage() {
   );
 }
 
-interface DayCardProps {
+function DayCard({
+  day,
+  isPending,
+  onChange,
+}: {
   day: MealDayDTO;
-  pending: boolean;
+  isPending: boolean;
   onChange: (choice: string | null) => void;
-}
-
-function DayCard({ day, pending, onChange }: DayCardProps) {
-  const date = parseDay(day.date);
-  const weekday = date.toLocaleDateString(undefined, { weekday: "long" });
-  const shortDate = date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}) {
+  const { t, locale } = useT();
+  const d = parseDay(day.date);
+  const dayName = d.toLocaleDateString(locale, { weekday: "long" }).toUpperCase();
+  const dateStr = `${d.getDate()}.${d.getMonth() + 1}.`;
   const signedUp = day.ordered_meal !== null;
 
   return (
     <div
-      className={[
-        "flex flex-col rounded-xl border p-4 transition-colors duration-200",
-        day.open
-          ? "border-slate-800 bg-slate-900/60 hover:border-slate-700"
-          : "border-slate-800/60 bg-slate-900/30",
-      ].join(" ")}
+      style={{
+        background: "#161208",
+        border: "1px solid rgba(176,141,87,0.14)",
+        borderRadius: 10,
+        overflow: "hidden",
+      }}
     >
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <p className="font-semibold text-white">{weekday}</p>
-          <p className="text-xs text-slate-500">{shortDate}</p>
+      {/* Card header */}
+      <div style={{ padding: "12px 12px 10px", borderBottom: "1px solid rgba(176,141,87,0.1)" }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.4)", marginBottom: 2 }}>
+          {dayName}
         </div>
-        {day.open && (
-          <span
-            className={[
-              "rounded-md px-2 py-0.5 text-[11px] font-semibold",
-              signedUp ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-700/40 text-slate-400",
-            ].join(" ")}
+        <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 20, color: "#E8DCC7", fontWeight: 400, marginBottom: 6 }}>
+          {dateStr}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+          <div
+            style={{
+              padding: "3px 7px",
+              borderRadius: 3,
+              background: signedUp ? "rgba(50,90,60,0.15)" : "rgba(232,220,199,0.04)",
+            }}
           >
-            {signedUp ? "Signed in" : "Not signed in"}
-          </span>
-        )}
-      </div>
-
-      {!day.open ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 py-8 text-center">
-          <CircleSlash className="size-6 text-slate-600" aria-hidden />
-          <p className="text-sm text-slate-500">No service</p>
-        </div>
-      ) : day.options.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 py-8 text-center">
-          <Soup className="size-6 text-slate-600" aria-hidden />
-          <p className="text-sm text-slate-500">No menu published yet</p>
-        </div>
-      ) : (
-        <>
-          <fieldset className="flex-1 space-y-2" disabled={pending}>
-            <legend className="sr-only">Menu choice for {weekday}</legend>
-            {day.options.map((opt) => {
-              const checked = day.ordered_meal === opt.letter;
-              return (
-                <label
-                  key={opt.letter}
-                  className={[
-                    "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 transition-colors duration-200",
-                    pending
-                      ? "cursor-wait opacity-70"
-                      : checked
-                        ? "cursor-pointer border-violet-500/60 bg-violet-500/10"
-                        : "cursor-pointer border-slate-800 hover:border-slate-600",
-                  ].join(" ")}
-                >
-                  <input
-                    type="radio"
-                    name={`menu-${day.date}`}
-                    value={opt.letter}
-                    checked={checked}
-                    disabled={pending}
-                    onChange={() => onChange(opt.letter)}
-                    className="mt-1 size-3.5 shrink-0 accent-violet-500"
-                  />
-                  <span className="min-w-0">
-                    <span
-                      className={[
-                        "block text-sm font-medium",
-                        checked ? "text-violet-200" : "text-slate-200",
-                      ].join(" ")}
-                    >
-                      Menu {opt.letter} — {opt.name ?? "—"}
-                    </span>
-                    {opt.weight && (
-                      <span className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">
-                        <Soup className="size-3 shrink-0" aria-hidden />
-                        {opt.weight}
-                        {opt.allergens ? ` · allergens ${opt.allergens}` : ""}
-                      </span>
-                    )}
-                  </span>
-                </label>
-              );
-            })}
-          </fieldset>
-
-          <div className="mt-4 border-t border-slate-800 pt-3">
-            <p
-              className={[
-                "mb-2 flex items-center gap-1.5 text-xs font-medium",
-                signedUp ? "text-emerald-300" : "text-slate-400",
-              ].join(" ")}
-            >
-              {signedUp ? (
-                <>
-                  <CircleCheck className="size-3.5 shrink-0" aria-hidden />
-                  Signed in · Menu {day.ordered_meal}
-                </>
-              ) : (
-                <>
-                  <CircleSlash className="size-3.5 shrink-0" aria-hidden />
-                  No meal this day
-                </>
-              )}
-            </p>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7, letterSpacing: "0.1em", color: signedUp ? "#88c8a0" : "rgba(232,220,199,0.32)" }}>
+              {signedUp ? t("canteen.signedUp", { letter: day.ordered_meal ?? "" }) : t("canteen.notSignedUp")}
+            </span>
+          </div>
+          {signedUp && day.open && (
             <button
               type="button"
-              disabled={pending || !signedUp}
               onClick={() => onChange(null)}
-              className="w-full cursor-pointer rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 transition-colors duration-200 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={isPending}
+              onMouseEnter={(e) => { if (!isPending) e.currentTarget.style.color = "#c88888"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "rgba(200,120,120,0.65)"; }}
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: "2px 4px",
+                cursor: isPending ? "wait" : "pointer",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 7,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "rgba(200,120,120,0.65)",
+                transition: "color 0.15s",
+                whiteSpace: "nowrap",
+              }}
             >
-              {pending ? "Saving…" : "Check out"}
+              {t("canteen.signOff")} ✕
             </button>
+          )}
+        </div>
+      </div>
+
+      {/* Body */}
+      {!day.open ? (
+        <div style={{ padding: "18px 12px", textAlign: "center" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.18)" }}>
+            {t("canteen.closed")}
           </div>
-        </>
+        </div>
+      ) : day.options.length === 0 ? (
+        <div style={{ padding: "18px 12px", textAlign: "center" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(232,220,199,0.18)" }}>
+            {t("canteen.menuNotPublished")}
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          {day.options.map((opt) => (
+            <MealOption
+              key={opt.letter}
+              opt={opt}
+              selected={day.ordered_meal === opt.letter}
+              disabled={isPending}
+              onClick={() => onChange(opt.letter)}
+            />
+          ))}
+        </div>
       )}
     </div>
+  );
+}
+
+function MealOption({
+  opt,
+  selected,
+  disabled,
+  onClick,
+}: {
+  opt: MenuOptionDTO;
+  selected: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const { t } = useT();
+  const details = [opt.weight, opt.allergens ? t("canteen.allergens", { a: opt.allergens }) : null].filter(Boolean).join(" · ");
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: "9px 10px",
+        borderRadius: 6,
+        border: `1px solid ${selected ? "rgba(176,141,87,0.4)" : "rgba(176,141,87,0.12)"}`,
+        background: selected ? "rgba(176,141,87,0.12)" : "transparent",
+        cursor: disabled ? "wait" : "pointer",
+        opacity: disabled ? 0.7 : 1,
+        textAlign: "left",
+        transition: "all 0.15s",
+        width: "100%",
+      }}
+    >
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, letterSpacing: "0.12em", textTransform: "uppercase", color: "#B08D57", marginBottom: 3 }}>
+        {t("canteen.menu", { letter: opt.letter })}
+      </div>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 500, color: "#E8DCC7", lineHeight: 1.3, marginBottom: 2 }}>
+        {opt.name ?? "—"}
+      </div>
+      {details && (
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7, color: "rgba(232,220,199,0.25)", lineHeight: 1.4 }}>
+          {details}
+        </div>
+      )}
+    </button>
   );
 }

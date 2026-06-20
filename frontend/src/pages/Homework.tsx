@@ -1,80 +1,59 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  CalendarClock,
-  CheckCircle2,
-  Download,
-  LoaderCircle,
-  Paperclip,
-  Search,
-  Sparkles,
-  X,
-} from "lucide-react";
-import {
-  buildAiDraft,
-  daysRemainingLabel,
-  formatDate,
   getHomeworkStatus,
   type Homework,
   type HomeworkStatus,
 } from "../data/mock";
 import { api, type HomeworkAttachment } from "../api/client";
+import { useCachedResource } from "../api/useCachedResource";
+import { useT } from "../i18n/LanguageContext";
+import RefreshButton from "../components/RefreshButton";
+
+const HOMEWORK_CACHE_KEY = "homework";
 
 type StatusFilter = "all" | HomeworkStatus;
 
-const FILTERS: { id: StatusFilter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "due-soon", label: "Due soon" },
-  { id: "pending", label: "Pending" },
-  { id: "overdue", label: "Overdue" },
-  { id: "done", label: "Done" },
+const FILTERS: { id: StatusFilter; labelKey: string }[] = [
+  { id: "all", labelKey: "homework.filterAll" },
+  { id: "due-soon", labelKey: "homework.filterDueSoon" },
+  { id: "pending", labelKey: "homework.filterPending" },
+  { id: "overdue", labelKey: "homework.filterOverdue" },
+  { id: "done", labelKey: "homework.filterDone" },
 ];
 
-const BADGE_STYLES: Record<HomeworkStatus, string> = {
-  "due-soon": "bg-amber-500/15 text-amber-300",
-  pending: "bg-sky-500/15 text-sky-300",
-  overdue: "bg-red-500/15 text-red-300",
-  done: "bg-emerald-500/15 text-emerald-300",
+type StatusStyle = { bg: string; border: string; color: string; labelKey: string };
+
+const STATUS_STYLES: Record<HomeworkStatus, StatusStyle> = {
+  done:       { bg: "rgba(50,90,60,0.20)",  border: "rgba(50,90,60,0.35)",  color: "#88c8a0", labelKey: "homework.statusDone" },
+  overdue:    { bg: "rgba(90,40,40,0.20)",  border: "rgba(90,40,40,0.35)",  color: "#c88888", labelKey: "homework.statusOverdue" },
+  "due-soon": { bg: "rgba(110,78,20,0.20)", border: "rgba(110,78,20,0.35)", color: "#d4a85a", labelKey: "homework.statusDueSoon" },
+  pending:    { bg: "rgba(30,54,84,0.20)",  border: "rgba(30,54,84,0.35)",  color: "#7ab0d4", labelKey: "homework.statusPending" },
 };
 
-const BADGE_LABELS: Record<HomeworkStatus, string> = {
-  "due-soon": "Due soon",
-  pending: "Pending",
-  overdue: "Overdue",
-  done: "Done",
-};
+type AiState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "success"; draft: string }
+  | { phase: "error"; message: string };
 
-type AiState = { phase: "idle" } | { phase: "loading" } | { phase: "success"; draft: string };
+function fmtDue(iso: string, locale: string): string {
+  return new Date(iso).toLocaleDateString(locale, { day: "numeric", month: "short" });
+}
 
 export default function HomeworkPage() {
-  // Master array: fetched once on mount, filtering happens client-side.
-  const [homework, setHomework] = useState<Homework[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { t } = useT();
+  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const { data, loading, refreshing, error, lastUpdated, refresh, mutate } =
+    useCachedResource<Homework[]>(HOMEWORK_CACHE_KEY, api.listHomework, {
+      errorFallback: t("homework.loadError"),
+    });
+  const homework = useMemo(() => data ?? [], [data]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [selected, setSelected] = useState<Homework | null>(null);
   const [ai, setAi] = useState<AiState>({ phase: "idle" });
-  // Assignment ids with an in-flight done-toggle, and a transient error toast.
   const [togglingDone, setTogglingDone] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .listHomework()
-      .then((items) => {
-        if (!cancelled) setHomework(items);
-      })
-      .catch((err: { detail?: string }) => {
-        if (!cancelled) setError(err?.detail ?? "Could not load homework from EduPage.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -100,31 +79,33 @@ export default function HomeworkPage() {
     setAi({ phase: "idle" });
   }
 
-  function runAi(hw: Homework) {
+  async function runAi(hw: Homework) {
     setAi({ phase: "loading" });
-    // Simulated AI pipeline latency.
-    setTimeout(() => setAi({ phase: "success", draft: buildAiDraft(hw) }), 1800);
+    try {
+      // Backend (Gemini) pulls in the assignment's attachments and the
+      // student's custom instructions; we only hand it the assignment id.
+      const result = await api.generateAiDraft(hw.id);
+      setAi({ phase: "success", draft: result.draft });
+    } catch (err) {
+      setAi({ phase: "error", message: (err as { detail?: string })?.detail ?? t("homework.aiError") });
+    }
   }
 
-  // Optimistically flip the done flag, rolling back if EduPage rejects it.
   async function toggleDone(hw: Homework, done: boolean) {
     const apply = (submitted: boolean) => {
-      setHomework((list) => list.map((h) => (h.id === hw.id ? { ...h, submitted } : h)));
-      setSelected((cur) => (cur && cur.id === hw.id ? { ...cur, submitted } : cur));
+      // `mutate` updates both the on-screen list and the cache in one step.
+      mutate((list) => (list ?? []).map((h) => (h.id === hw.id ? { ...h, submitted } : h)));
+      setSelected((cur) => (cur?.id === hw.id ? { ...cur, submitted } : cur));
     };
     setTogglingDone((prev) => new Set(prev).add(hw.id));
     apply(done);
     try {
       await api.setHomeworkDone(hw.id, done);
     } catch (err) {
-      apply(!done); // roll back
-      setToast((err as { detail?: string })?.detail ?? "Could not update homework on EduPage.");
+      apply(!done);
+      setToast((err as { detail?: string })?.detail ?? t("homework.saveError"));
     } finally {
-      setTogglingDone((prev) => {
-        const next = new Set(prev);
-        next.delete(hw.id);
-        return next;
-      });
+      setTogglingDone((prev) => { const next = new Set(prev); next.delete(hw.id); return next; });
     }
   }
 
@@ -135,103 +116,156 @@ export default function HomeworkPage() {
   }, [toast]);
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8 lg:px-10">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-white">Homework Hub</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Everything your teachers assigned, in one place.
-        </p>
-      </header>
+    <div style={{ padding: "36px 40px" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+        <div>
+          <div
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              color: "rgba(176,141,87,0.5)",
+              marginBottom: 6,
+            }}
+          >
+            {t("homework.eyebrow")}
+          </div>
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: 34,
+              fontWeight: 500,
+              color: "#E8DCC7",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {t("homework.title")}
+          </div>
+        </div>
+        <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
+      </div>
 
       {/* Filter bar */}
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <label className="relative min-w-0 flex-1 sm:max-w-xs">
-          <span className="sr-only">Search homework</span>
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500"
-            aria-hidden
-          />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 22, flexWrap: "wrap" }}>
+        {/* Search */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "#161208",
+            border: "1px solid rgba(176,141,87,0.14)",
+            borderRadius: 7,
+            padding: "8px 12px",
+            flexShrink: 0,
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+            <circle cx="6" cy="6" r="4" stroke="rgba(176,141,87,0.45)" strokeWidth="1.3" />
+            <path d="M10 10l3 3" stroke="rgba(176,141,87,0.45)" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
           <input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search subject, title, teacher…"
-            className="w-full rounded-lg border border-slate-700 bg-slate-900 py-2 pl-9 pr-3 text-sm text-white placeholder-slate-600 transition focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            placeholder={t("common.search")}
+            style={{
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 12,
+              color: "rgba(232,220,199,0.6)",
+              width: 160,
+              padding: 0,
+            }}
           />
-        </label>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
-          {FILTERS.map((f) => (
+        </div>
+
+        {/* Filter pills */}
+        {FILTERS.map((f) => {
+          const active = filter === f.id;
+          return (
             <button
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              aria-pressed={filter === f.id}
-              className={[
-                "cursor-pointer rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-200",
-                filter === f.id
-                  ? "bg-violet-600 text-white"
-                  : "border border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-600 hover:text-slate-200",
-              ].join(" ")}
+              style={{
+                padding: "7px 12px",
+                borderRadius: 6,
+                border: `1px solid ${active ? "rgba(176,141,87,0.32)" : "rgba(176,141,87,0.12)"}`,
+                background: active ? "rgba(176,141,87,0.12)" : "transparent",
+                cursor: "pointer",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 9,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: active ? "#B08D57" : "rgba(232,220,199,0.42)",
+                transition: "all 0.15s",
+              }}
             >
-              {f.label}
+              {t(f.labelKey)}
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
-      {/* Cards */}
+      {/* Content */}
       {error ? (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-red-300">{error}</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Try reloading, or log in again if your session expired.
-          </p>
-        </div>
+        <ErrorPanel message={error} />
       ) : loading ? (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="h-36 animate-pulse rounded-xl border border-slate-800 bg-slate-900/60" />
+            <div
+              key={i}
+              style={{
+                height: 144,
+                background: "rgba(176,141,87,0.06)",
+                borderRadius: 10,
+                border: "1px solid rgba(176,141,87,0.08)",
+                animation: "none",
+                opacity: 0.6,
+              }}
+            />
           ))}
         </div>
       ) : visible.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-800 px-6 py-16 text-center">
-          <p className="text-sm font-medium text-slate-300">No assignments match.</p>
-          <p className="mt-1 text-xs text-slate-500">Try a different search or status filter.</p>
+        <div
+          style={{
+            border: "1px dashed rgba(176,141,87,0.18)",
+            borderRadius: 10,
+            padding: "64px 24px",
+            textAlign: "center",
+          }}
+        >
+          <p
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              color: "rgba(232,220,199,0.28)",
+            }}
+          >
+            {t("homework.noMatch")}
+          </p>
         </div>
       ) : (
-        <ul className="grid gap-4 sm:grid-cols-2">
+        <ul style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, listStyle: "none", padding: 0, margin: 0 }}>
           {visible.map((hw) => {
-            const status = getHomeworkStatus(hw);
+            const st = STATUS_STYLES[getHomeworkStatus(hw)];
             return (
               <li key={hw.id}>
-                <button
-                  type="button"
-                  onClick={() => openDetail(hw)}
-                  className="w-full cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 p-5 text-left transition duration-200 hover:border-violet-500/50 hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-violet-300">
-                      {hw.subject}
-                    </span>
-                    <span
-                      className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${BADGE_STYLES[status]}`}
-                    >
-                      {BADGE_LABELS[status]}
-                    </span>
-                  </div>
-                  <h2 className="mt-2 line-clamp-2 font-semibold text-white">{hw.title}</h2>
-                  <p className="mt-1 line-clamp-2 text-sm text-slate-400">{hw.description}</p>
-                  <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500">
-                    <CalendarClock className="size-3.5" aria-hidden />
-                    {formatDate(hw.dueAt)} · {hw.submitted ? "submitted" : daysRemainingLabel(hw.dueAt)}
-                  </p>
-                </button>
+                <HomeworkCard hw={hw} st={st} onClick={() => openDetail(hw)} />
               </li>
             );
           })}
         </ul>
       )}
 
+      {/* Detail drawer */}
       {selected && (
         <DetailDrawer
           key={selected.id}
@@ -245,19 +279,133 @@ export default function HomeworkPage() {
         />
       )}
 
+      {/* Toast */}
       {toast && (
         <div
           role="status"
-          className="fixed bottom-6 left-1/2 z-[60] flex max-w-md -translate-x-1/2 items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/15 px-4 py-3 text-sm text-red-200 shadow-2xl"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 200,
+            background: "#161208",
+            border: "1px solid rgba(176,141,87,0.28)",
+            borderRadius: 8,
+            padding: "11px 18px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
         >
-          <X className="size-4 shrink-0" aria-hidden />
-          <span className="min-w-0">{toast}</span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: "0.12em", color: "#c88888" }}>
+            {toast}
+          </span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(232,220,199,0.4)", padding: 0 }}
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>
   );
 }
 
+function HomeworkCard({ hw, st, onClick }: { hw: Homework; st: StatusStyle; onClick: () => void }) {
+  const { t, locale } = useT();
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: "100%",
+        background: hovered ? "#1c1710" : "#161208",
+        border: `1px solid ${hovered ? "rgba(176,141,87,0.3)" : "rgba(176,141,87,0.14)"}`,
+        borderRadius: 10,
+        padding: 18,
+        cursor: "pointer",
+        textAlign: "left",
+        transition: "background 0.15s, border-color 0.15s",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.13em", textTransform: "uppercase", color: "#B08D57" }}>
+          {hw.subject}
+        </div>
+        <span
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 8,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            padding: "3px 7px",
+            borderRadius: 4,
+            background: st.bg,
+            color: st.color,
+            border: `1px solid ${st.border}`,
+            whiteSpace: "nowrap",
+            flexShrink: 0,
+          }}
+        >
+          {t(st.labelKey)}
+        </span>
+      </div>
+      <div
+        style={{
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 14,
+          fontWeight: 500,
+          color: "#E8DCC7",
+          marginBottom: 6,
+          lineHeight: 1.3,
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
+        {hw.title}
+      </div>
+      <div
+        style={{
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 12,
+          color: "rgba(232,220,199,0.42)",
+          lineHeight: 1.5,
+          overflow: "hidden",
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          marginBottom: 12,
+        }}
+      >
+        {hw.description}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <svg width="10" height="10" viewBox="0 0 14 14" fill="none">
+            <rect x="1" y="2" width="12" height="11" rx="1" stroke="rgba(232,220,199,0.28)" strokeWidth="1.2" />
+            <path d="M4 1v2M10 1v2M1 5h12" stroke="rgba(232,220,199,0.28)" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: "rgba(232,220,199,0.35)", letterSpacing: "0.05em" }}>
+            {fmtDue(hw.dueAt, locale)}
+          </span>
+        </div>
+        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.28)" }}>
+          {hw.teacher}
+        </span>
+      </div>
+    </button>
+  );
+}
 
 interface DrawerProps {
   homework: Homework;
@@ -269,223 +417,360 @@ interface DrawerProps {
   onClose: () => void;
 }
 
-function DetailDrawer({
-  homework,
-  ai,
-  doneBusy,
-  onToggleDone,
-  onRunAi,
-  onEditDraft,
-  onClose,
-}: DrawerProps) {
-  const status = getHomeworkStatus(homework);
-  const wide = ai.phase === "success";
-
+function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDraft, onClose }: DrawerProps) {
+  const { t, locale } = useT();
+  const st = STATUS_STYLES[getHomeworkStatus(homework)];
   const [attachments, setAttachments] = useState<HomeworkAttachment[]>([]);
-  // Start in the loading state when we know a fetch is coming (drawer is keyed
-  // by homework id, so this initialises fresh on each open).
   const [attLoading, setAttLoading] = useState(Boolean(homework.hasAttachments));
   const [attError, setAttError] = useState<string | null>(null);
 
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Attachments live in a linked e-test and are fetched lazily on open. The
-  // drawer is keyed by homework id at the call site, so this runs once per open.
   useEffect(() => {
     if (!homework.hasAttachments) return;
     let cancelled = false;
     api
       .listHomeworkAttachments(homework.id)
-      .then((files) => {
-        if (!cancelled) setAttachments(files);
-      })
-      .catch((err: { detail?: string }) => {
-        if (!cancelled) setAttError(err?.detail ?? "Could not load attachments.");
-      })
-      .finally(() => {
-        if (!cancelled) setAttLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [homework.id, homework.hasAttachments]);
+      .then((files) => { if (!cancelled) setAttachments(files); })
+      .catch((err: { detail?: string }) => { if (!cancelled) setAttError(err?.detail ?? t("homework.attachmentsError")); })
+      .finally(() => { if (!cancelled) setAttLoading(false); });
+    return () => { cancelled = true; };
+  }, [homework.id, homework.hasAttachments, t]);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={homework.title}>
-      <button
-        type="button"
-        aria-label="Close details"
-        onClick={onClose}
-        className="absolute inset-0 cursor-pointer bg-black/60 backdrop-blur-sm"
-      />
+    <>
+      {/* Backdrop */}
       <div
-        className={[
-          "relative flex h-full flex-col overflow-y-auto border-l border-slate-800 bg-slate-950 shadow-2xl transition-all duration-300",
-          wide ? "w-full max-w-4xl" : "w-full max-w-lg",
-        ].join(" ")}
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.42)",
+          zIndex: 49,
+          transition: "opacity 0.32s",
+        }}
+      />
+
+      {/* Drawer */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={homework.title}
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 460,
+          background: "#120f0b",
+          borderLeft: "1px solid rgba(176,141,87,0.18)",
+          boxShadow: "-24px 0 60px rgba(0,0,0,0.5)",
+          zIndex: 50,
+          overflowY: "auto",
+          transform: "translateX(0)",
+          transition: "transform 0.32s cubic-bezier(0.2,0.7,0.15,1)",
+        }}
       >
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-800 bg-slate-950/95 px-6 py-5 backdrop-blur">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-violet-300">
+        <div style={{ padding: "24px 24px 48px" }}>
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={{ paddingRight: 16, minWidth: 0 }}>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "#B08D57", marginBottom: 5 }}>
                 {homework.subject}
-              </span>
-              <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${BADGE_STYLES[status]}`}>
-                {BADGE_LABELS[status]}
-              </span>
+              </div>
+              <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 22, fontWeight: 500, color: "#E8DCC7", lineHeight: 1.2 }}>
+                {homework.title}
+              </div>
+              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.35)", marginTop: 5 }}>
+                {homework.teacher} · {t("homework.due", { date: fmtDue(homework.dueAt, locale) })}
+              </div>
             </div>
-            <h2 className="mt-1 text-lg font-semibold text-white">{homework.title}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              {homework.teacher} · due {formatDate(homework.dueAt)}
-              {homework.submitted ? " · submitted" : ` (${daysRemainingLabel(homework.dueAt)})`}
-            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t("common.close")}
+              style={{
+                width: 28,
+                height: 28,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "1px solid rgba(176,141,87,0.18)",
+                borderRadius: 5,
+                cursor: "pointer",
+                background: "transparent",
+                flexShrink: 0,
+              }}
+            >
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+                <path d="M1 1l8 8M9 1L1 9" stroke="rgba(232,220,199,0.45)" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
+
+          {/* Status badge */}
+          <span
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 8,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              padding: "3px 8px",
+              borderRadius: 4,
+              background: st.bg,
+              color: st.color,
+              border: `1px solid ${st.border}`,
+            }}
+          >
+            {t(st.labelKey)}
+          </span>
+
+          <div style={{ height: 1, background: "rgba(176,141,87,0.1)", margin: "16px 0" }} />
+
+          {/* Mark as done */}
           <button
             type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg text-slate-400 transition-colors duration-200 hover:bg-slate-800 hover:text-white"
+            onClick={() => onToggleDone(!homework.submitted)}
+            disabled={doneBusy}
+            aria-pressed={homework.submitted}
+            style={{
+              width: "100%",
+              padding: 11,
+              borderRadius: 8,
+              border: `1px solid ${homework.submitted ? "rgba(50,90,60,0.35)" : "rgba(176,141,87,0.25)"}`,
+              background: homework.submitted ? "rgba(50,90,60,0.18)" : "rgba(176,141,87,0.12)",
+              textAlign: "center",
+              cursor: doneBusy ? "not-allowed" : "pointer",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.16em",
+              textTransform: "uppercase",
+              color: homework.submitted ? "#88c8a0" : "#B08D57",
+              marginBottom: 18,
+              opacity: doneBusy ? 0.6 : 1,
+              transition: "all 0.2s",
+            }}
           >
-            <X className="size-5" aria-hidden />
+            {doneBusy ? t("settings.saving") : homework.submitted ? t("homework.markDoneToggle") : t("homework.markDone")}
           </button>
-        </div>
 
-        <div className="flex-1 px-6 py-6">
-          {ai.phase !== "success" && (
-            <>
-              <button
-                type="button"
-                onClick={() => onToggleDone(!homework.submitted)}
-                disabled={doneBusy}
-                aria-pressed={homework.submitted}
-                className={[
-                  "mb-5 flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-70",
-                  homework.submitted
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
-                    : "cursor-pointer border-slate-700 text-slate-200 hover:border-emerald-500/50 hover:bg-emerald-500/10 hover:text-emerald-300",
-                ].join(" ")}
-              >
-                {doneBusy ? (
-                  <LoaderCircle className="size-4 animate-spin" aria-hidden />
-                ) : (
-                  <CheckCircle2 className="size-4" aria-hidden />
-                )}
-                {homework.submitted ? "Done — mark as not done" : "Mark as done"}
-              </button>
+          {/* Description */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 8 }}>
+              {t("homework.assignment")}
+            </div>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "rgba(232,220,199,0.68)", lineHeight: 1.65, whiteSpace: "pre-line" }}>
+              {homework.description}
+            </div>
+          </div>
 
-              <h3 className="text-sm font-semibold text-slate-300">Instructions</h3>
-              <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-400">
-                {homework.description}
-              </p>
-
-              {homework.hasAttachments && (
-                <div className="mt-6">
-                  <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-300">
-                    <Paperclip className="size-4" aria-hidden />
-                    Attachments
-                  </h3>
-                  {attLoading ? (
-                    <div className="mt-2 h-10 animate-pulse rounded-lg bg-slate-800" aria-hidden />
-                  ) : attError ? (
-                    <p className="mt-2 text-sm text-red-300">{attError}</p>
-                  ) : attachments.length === 0 ? (
-                    <p className="mt-2 text-sm text-slate-500">No files attached.</p>
-                  ) : (
-                    <ul className="mt-2 space-y-2">
-                      {attachments.map((f) => (
-                        <li key={f.url}>
-                          <a
-                            href={f.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-2.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 transition-colors duration-200 hover:border-violet-500/50 hover:bg-slate-900"
-                          >
-                            <Download className="size-4 shrink-0 text-violet-300" aria-hidden />
-                            <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                            {f.extension && (
-                              <span className="shrink-0 text-xs font-medium uppercase text-slate-500">
-                                {f.extension}
-                              </span>
-                            )}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+          {/* Attachments */}
+          {homework.hasAttachments && (
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 8 }}>
+                {t("homework.attachments")}
+              </div>
+              {attLoading ? (
+                <div style={{ height: 36, background: "rgba(176,141,87,0.06)", borderRadius: 6 }} />
+              ) : attError ? (
+                <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#c88888" }}>{attError}</p>
+              ) : attachments.length === 0 ? (
+                <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "rgba(232,220,199,0.3)" }}>{t("homework.noAttachments")}</p>
+              ) : (
+                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {attachments.map((f) => (
+                    <li key={f.url}>
+                      <a
+                        href={f.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          background: "rgba(176,141,87,0.06)",
+                          border: "1px solid rgba(176,141,87,0.14)",
+                          borderRadius: 6,
+                          padding: "8px 10px",
+                          textDecoration: "none",
+                          color: "#E8DCC7",
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                          <path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="#B08D57" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {f.name}
+                        </span>
+                        {f.extension && (
+                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, textTransform: "uppercase", color: "rgba(232,220,199,0.4)" }}>
+                            {f.extension}
+                          </span>
+                        )}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
               )}
+            </div>
+          )}
 
-              <button
-                type="button"
-                onClick={onRunAi}
-                disabled={ai.phase === "loading"}
-                className="mt-8 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 font-medium text-white transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {ai.phase === "loading" ? (
-                  <>
-                    <LoaderCircle className="size-5 animate-spin" aria-hidden />
-                    Drafting your homework…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="size-5" aria-hidden />
-                    Let AI Make My Homework
-                  </>
-                )}
-              </button>
-              {ai.phase === "loading" && (
-                <div className="mt-6 space-y-2" aria-hidden>
-                  <div className="h-3 w-3/4 animate-pulse rounded bg-slate-800" />
-                  <div className="h-3 w-full animate-pulse rounded bg-slate-800" />
-                  <div className="h-3 w-5/6 animate-pulse rounded bg-slate-800" />
-                </div>
-              )}
-              <p className="mt-3 text-center text-xs text-slate-600">
-                The AI prepares a draft for your review — nothing is ever submitted automatically.
-              </p>
-            </>
+          <div style={{ height: 1, background: "rgba(176,141,87,0.1)", marginBottom: 18 }} />
+
+          {/* AI section */}
+          {ai.phase === "idle" && (
+            <AiButton onClick={onRunAi} />
+          )}
+
+          {ai.phase === "loading" && (
+            <div
+              style={{
+                padding: 16,
+                background: "rgba(176,141,87,0.06)",
+                borderRadius: 8,
+                border: "1px solid rgba(176,141,87,0.12)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <div
+                  style={{
+                    width: 14,
+                    height: 14,
+                    border: "1.5px solid #B08D57",
+                    borderTopColor: "transparent",
+                    borderRadius: "50%",
+                    animation: "spin 0.8s linear infinite",
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", color: "rgba(176,141,87,0.8)" }}>
+                  {t("homework.aiGenerating")}
+                </span>
+              </div>
+              <div style={{ height: 8, background: "rgba(176,141,87,0.08)", borderRadius: 4, marginBottom: 6, width: "88%" }} />
+              <div style={{ height: 8, background: "rgba(176,141,87,0.06)", borderRadius: 4, marginBottom: 6, width: "72%" }} />
+              <div style={{ height: 8, background: "rgba(176,141,87,0.04)", borderRadius: 4, width: "55%" }} />
+            </div>
           )}
 
           {ai.phase === "success" && (
-            <div className="flex h-full flex-col">
-              <p className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-                <CheckCircle2 className="size-4 shrink-0" aria-hidden />
-                Draft ready — review and edit it before using anything.
-              </p>
-              <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-2">
-                <section className="flex min-h-0 flex-col rounded-xl border border-slate-800 bg-slate-900/60">
-                  <h3 className="border-b border-slate-800 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Teacher's instructions
-                  </h3>
-                  <p className="flex-1 overflow-y-auto whitespace-pre-line px-4 py-3 text-sm leading-relaxed text-slate-400">
-                    {homework.description}
-                  </p>
-                </section>
-                <section className="flex min-h-0 flex-col rounded-xl border border-violet-500/30 bg-slate-900/60">
-                  <h3 className="border-b border-violet-500/20 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-violet-300">
-                    AI draft — editable
-                  </h3>
-                  <textarea
-                    value={ai.draft}
-                    onChange={(e) => onEditDraft(e.target.value)}
-                    aria-label="AI draft (editable)"
-                    spellCheck={false}
-                    className="min-h-[20rem] flex-1 resize-none bg-transparent px-4 py-3 font-mono text-sm leading-relaxed text-slate-200 focus:outline-none"
-                  />
-                </section>
+            <div>
+              <div
+                style={{
+                  background: "rgba(60,100,72,0.1)",
+                  border: "1px solid rgba(60,100,72,0.22)",
+                  borderRadius: 6,
+                  padding: "10px 14px",
+                  marginBottom: 14,
+                }}
+              >
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "#88c8a0" }}>
+                  {t("homework.aiReady")}
+                </span>
               </div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
+                {t("homework.aiDraftLabel")}
+              </div>
+              <textarea
+                value={ai.draft}
+                onChange={(e) => onEditDraft(e.target.value)}
+                rows={9}
+                aria-label={t("homework.aiDraftAria")}
+                spellCheck={false}
+                style={{
+                  width: "100%",
+                  padding: 12,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 11,
+                  lineHeight: 1.65,
+                  resize: "vertical",
+                  borderColor: "rgba(176,141,87,0.28)",
+                }}
+              />
+              <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10, color: "rgba(232,220,199,0.22)", marginTop: 6 }}>
+                {t("homework.aiNothingSubmitted")}
+              </div>
+            </div>
+          )}
+
+          {ai.phase === "error" && (
+            <div>
+              <div
+                style={{
+                  background: "rgba(90,40,40,0.18)",
+                  border: "1px solid rgba(90,40,40,0.35)",
+                  borderRadius: 6,
+                  padding: "10px 14px",
+                  marginBottom: 12,
+                }}
+              >
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "#c88888" }}>
+                  {ai.message}
+                </span>
+              </div>
+              <AiButton onClick={onRunAi} labelKey="homework.aiRetry" />
             </div>
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
+function AiButton({ onClick, labelKey = "homework.aiButton" }: { onClick: () => void; labelKey?: string }) {
+  const { t } = useT();
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        width: "100%",
+        padding: 13,
+        borderRadius: 8,
+        background: hovered ? "rgba(176,141,87,0.14)" : "rgba(176,141,87,0.08)",
+        border: "1px solid rgba(176,141,87,0.25)",
+        textAlign: "center",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        transition: "background 0.15s",
+      }}
+    >
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+        <path d="M7 1l1.4 3.5L12 5 9.7 7.3l.8 3.7L7 9.5 3.5 11l.8-3.7L2 5l3.6-.5L7 1z" stroke="#B08D57" strokeWidth="1.2" strokeLinejoin="round" />
+      </svg>
+      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "#B08D57" }}>
+        {t(labelKey)}
+      </span>
+    </button>
+  );
+}
 
+function ErrorPanel({ message }: { message: string }) {
+  const { t } = useT();
+  return (
+    <div
+      style={{
+        background: "rgba(90,40,40,0.2)",
+        border: "1px solid rgba(90,40,40,0.35)",
+        borderRadius: 10,
+        padding: "48px 24px",
+        textAlign: "center",
+      }}
+    >
+      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#c88888", margin: 0 }}>{message}</p>
+      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: "rgba(232,220,199,0.3)", margin: "6px 0 0" }}>
+        {t("common.retryOrLogin")}
+      </p>
+    </div>
+  );
+}

@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     # CORS: the React frontend origin allowed to call this API.
     frontend_origin: str = "http://localhost:5173"
 
-    # Optional: set to enable the example agent endpoint
+    # Optional: set to enable the example agent endpoint (agents/ folder)
     anthropic_api_key: str = ""
+
+    # Required for the AI homework assistant (Gemini)
+    gemini_api_key: str = ""
 
     @property
     def is_production(self) -> bool:

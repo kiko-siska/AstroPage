@@ -20,7 +20,7 @@ def test_blank_custom_prompt_ignored():
 
 
 async def test_fallback_draft_without_api_key(monkeypatch):
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "gemini_api_key", "")
     draft = await ai_service.generate_draft("Math", "Worksheet", "Solve 4–12.", None)
     assert draft.startswith("# Worksheet — Draft")
     assert "Solve 4–12." in draft

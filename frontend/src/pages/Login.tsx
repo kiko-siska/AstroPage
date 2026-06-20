@@ -1,12 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../context/AuthContext";
+import { useT } from "../i18n/LanguageContext";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 import type { ApiError } from "../api/client";
 
 export default function Login() {
   const { login } = useAuth();
+  const { t } = useT();
+  const [subdomain, setSubdomain] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [subdomain, setSubdomain] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -19,9 +22,9 @@ export default function Login() {
     } catch (err) {
       const apiErr = err as ApiError;
       if (apiErr.status === 429) {
-        setError("Too many attempts. Please wait a minute and try again.");
+        setError(t("login.tooManyAttempts"));
       } else {
-        setError(apiErr.detail ?? "Login failed. Please try again.");
+        setError(apiErr.detail ?? t("login.failed"));
       }
     } finally {
       setSubmitting(false);
@@ -29,64 +32,168 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-semibold tracking-tight text-white">AstroPage</h1>
-          <p className="mt-2 text-sm text-slate-400">
-            Sign in with your EduPage account
-          </p>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#0a0805",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      {/* Radial glow blobs */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(60% 50% at 20% 30%, rgba(176,141,87,0.12), transparent 70%), " +
+            "radial-gradient(40% 40% at 85% 80%, rgba(212,175,122,0.08), transparent 70%)",
+          pointerEvents: "none",
+        }}
+      />
+      {/* Vignette */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "radial-gradient(120% 80% at 50% 50%, transparent 55%, rgba(0,0,0,0.5) 100%)",
+          pointerEvents: "none",
+        }}
+      />
+
+      {/* Card */}
+      <div
+        style={{
+          width: 340,
+          background: "#161208",
+          borderRadius: 16,
+          border: "1px solid rgba(176,141,87,0.22)",
+          padding: "36px 32px",
+          boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        {/* Header */}
+        <div style={{ textAlign: "center", marginBottom: 22 }}>
+          <div
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.22em",
+              textTransform: "uppercase",
+              color: "rgba(176,141,87,0.45)",
+              marginBottom: 10,
+            }}
+          >
+            EduPage · {t("login.eyebrow")}
+          </div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 1, height: 16, background: "rgba(176,141,87,0.5)" }} />
+            <span
+              style={{
+                fontFamily: "'Cormorant Garamond', serif",
+                fontSize: 20,
+                fontWeight: 400,
+                color: "#E8DCC7",
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+              }}
+            >
+              AstroPage
+            </span>
+            <div style={{ width: 1, height: 16, background: "rgba(176,141,87,0.5)" }} />
+          </div>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/60 p-8 shadow-xl backdrop-blur"
-        >
+        <div style={{ height: 1, background: "rgba(176,141,87,0.12)", marginBottom: 20 }} />
+
+        <form onSubmit={handleSubmit}>
           <Field
-            label="School domain"
-            hint="Just the subdomain, e.g. spsezochova"
+            label={t("login.school")}
             value={subdomain}
             onChange={setSubdomain}
-            autoComplete="organization"
             placeholder="spsezochova"
+            autoComplete="organization"
           />
           <Field
-            label="Username"
+            label={t("login.username")}
             value={username}
             onChange={setUsername}
+            placeholder="janko.hrasko"
             autoComplete="username"
-            placeholder="your.name"
           />
           <Field
-            label="Password"
+            label={t("login.password")}
             type="password"
             value={password}
             onChange={setPassword}
-            autoComplete="current-password"
             placeholder="••••••••"
+            autoComplete="current-password"
+            style={{ marginBottom: 20 }}
           />
 
           {error && (
-            <p
+            <div
               role="alert"
-              className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+              style={{
+                background: "rgba(100,48,48,0.2)",
+                border: "1px solid rgba(100,48,48,0.35)",
+                borderRadius: 6,
+                padding: "9px 12px",
+                marginBottom: 14,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 12,
+                color: "#c88888",
+              }}
             >
               {error}
-            </p>
+            </div>
           )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-lg bg-violet-600 px-4 py-2.5 font-medium text-white transition hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
+            style={{
+              width: "100%",
+              background: submitting ? "rgba(176,141,87,0.6)" : "#B08D57",
+              color: "#0a0805",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10,
+              letterSpacing: "0.22em",
+              textTransform: "uppercase",
+              fontWeight: 500,
+              padding: 13,
+              textAlign: "center",
+              borderRadius: 6,
+              border: "none",
+              cursor: submitting ? "not-allowed" : "pointer",
+              transition: "background 0.2s",
+            }}
           >
-            {submitting ? "Signing in…" : "Sign in"}
+            {submitting ? t("login.submitting") : t("login.submit")}
           </button>
-
-          <p className="text-center text-xs text-slate-500">
-            We never store your EduPage password.
-          </p>
         </form>
+
+        <div
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 8,
+            letterSpacing: "0.12em",
+            color: "rgba(176,141,87,0.28)",
+            marginTop: 14,
+            textAlign: "center",
+          }}
+        >
+          {t("settings.passwordNever")}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
+          <LanguageSwitcher />
+        </div>
       </div>
     </div>
   );
@@ -97,25 +204,40 @@ interface FieldProps {
   value: string;
   onChange: (v: string) => void;
   type?: string;
-  hint?: string;
   placeholder?: string;
   autoComplete?: string;
+  style?: React.CSSProperties;
 }
 
-function Field({ label, value, onChange, type = "text", hint, placeholder, autoComplete }: FieldProps) {
+function Field({ label, value, onChange, type = "text", placeholder, autoComplete, style }: FieldProps) {
   return (
-    <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-slate-300">{label}</span>
+    <div style={{ marginBottom: 14, ...style }}>
+      <div
+        style={{
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 9,
+          letterSpacing: "0.2em",
+          textTransform: "uppercase",
+          color: "rgba(176,141,87,0.6)",
+          marginBottom: 5,
+        }}
+      >
+        {label}
+      </div>
       <input
         type={type}
         required
         value={value}
-        autoComplete={autoComplete}
         placeholder={placeholder}
+        autoComplete={autoComplete}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-white placeholder-slate-600 transition focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          fontFamily: type === "password" ? "'Inter', sans-serif" : "'Cormorant Garamond', serif",
+          fontSize: type === "password" ? 15 : 17,
+        }}
       />
-      {hint && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
-    </label>
+    </div>
   );
 }
