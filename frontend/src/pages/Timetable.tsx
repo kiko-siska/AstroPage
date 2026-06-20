@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, type DashboardPeriod, type TimetableDay, type TimetableWeek } from "../api/client";
 import { useCachedResource } from "../api/useCachedResource";
 import { useT } from "../i18n/LanguageContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 import RefreshButton from "../components/RefreshButton";
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string;
@@ -46,6 +47,7 @@ const eyebrow: React.CSSProperties = {
 
 export default function TimetablePage() {
   const { t, locale } = useT();
+  const isMobile = useIsMobile();
   const [offset, setOffset] = useState(0);
 
   // One cache entry per week offset; auto-refreshes when stale + manual button.
@@ -60,16 +62,16 @@ export default function TimetablePage() {
   const loading = !error && (week == null || week.weekOffset !== offset);
 
   return (
-    <div style={{ padding: "36px 40px" }}>
+    <div style={{ padding: isMobile ? "20px 16px" : "36px 40px" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <div>
           <div style={{ ...eyebrow, marginBottom: 6 }}>{offsetLabel(offset, t)}</div>
           <div style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: "#E8DCC7", letterSpacing: "-0.01em", lineHeight: 1 }}>
             {t("timetable.title")}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <RefreshButton onRefresh={refresh} refreshing={refreshing} lastUpdated={lastUpdated} />
           <WeekNav
             label={week ? weekRangeLabel(week.weekStart, locale) : "—"}
@@ -89,16 +91,20 @@ export default function TimetablePage() {
           </p>
         </div>
       ) : loading || !week ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
-          {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} style={{ height: 360, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
-          ))}
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(140px, 1fr))", gap: 10, minWidth: isMobile ? 700 : undefined }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} style={{ height: 360, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+            ))}
+          </div>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
-          {week.days.map((day) => (
-            <DayColumn key={day.date} day={day} isWeekViewable={offset === 0} />
-          ))}
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(140px, 1fr))", gap: 10, minWidth: isMobile ? 700 : undefined }}>
+            {week.days.map((day) => (
+              <DayColumn key={day.date} day={day} isWeekViewable={offset === 0} />
+            ))}
+          </div>
         </div>
       )}
     </div>

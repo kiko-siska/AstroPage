@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { api, type Grade, type SubjectGrades } from "../api/client";
 import { useCachedResource } from "../api/useCachedResource";
 import { useT } from "../i18n/LanguageContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 import RefreshButton from "../components/RefreshButton";
 
 // A grade inside the sandbox: every official grade is copied in, hypotheticals
@@ -132,26 +133,22 @@ const fieldLabel: React.CSSProperties = {
 
 export default function GradesPage() {
   const { t } = useT();
-  // Cached across tab switches; auto-refreshes when stale, plus a manual button.
+  const isMobile = useIsMobile();
   const { data, loading, refreshing, error, lastUpdated, refresh } =
     useCachedResource<SubjectGrades[]>(GRADES_CACHE_KEY, api.listGrades, {
       errorFallback: t("grades.loadError"),
     });
   const subjects = useMemo(() => data ?? [], [data]);
-  // null until the user picks; fall back to the first subject at render time so
-  // we never need a setState-in-effect to seed the default once grades arrive.
-  const [pickedSubject, setPickedSubject] = useState<string | null>(null);
-  const selectedSubject = pickedSubject ?? subjects[0]?.subjectName ?? null;
+  const [expandedSubject, setExpandedSubject] = useState<string | null>(null);
 
-  const selected = useMemo(
-    () => subjects.find((s) => s.subjectName === selectedSubject) ?? null,
-    [subjects, selectedSubject],
-  );
+  function toggleSubject(name: string) {
+    setExpandedSubject((prev) => (prev === name ? null : name));
+  }
 
   return (
-    <div style={{ padding: "36px 40px" }}>
+    <div style={{ padding: isMobile ? "20px 16px" : "36px 40px" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <div>
           <div style={{ ...eyebrow, marginBottom: 6 }}>{t("grades.eyebrow")}</div>
           <div
@@ -186,16 +183,13 @@ export default function GradesPage() {
           </p>
         </div>
       ) : loading ? (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {Array.from({ length: 5 }, (_, i) => (
-              <div
-                key={i}
-                style={{ height: 92, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }}
-              />
-            ))}
-          </div>
-          <div style={{ height: 420, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {Array.from({ length: 5 }, (_, i) => (
+            <div
+              key={i}
+              style={{ height: 92, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }}
+            />
+          ))}
         </div>
       ) : subjects.length === 0 ? (
         <div style={{ border: "1px dashed rgba(176,141,87,0.18)", borderRadius: 10, padding: "64px 24px", textAlign: "center" }}>
@@ -205,29 +199,113 @@ export default function GradesPage() {
           </p>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,340px) 1fr", gap: 20, alignItems: "start" }}>
-          <ReportCard subjects={subjects} selected={selectedSubject} onSelect={setPickedSubject} />
-          {selected ? (
-            <Sandbox key={selected.subjectName} subject={selected} />
-          ) : (
-            <div
-              style={{
-                display: "grid",
-                placeItems: "center",
-                border: "1px dashed rgba(176,141,87,0.18)",
-                borderRadius: 10,
-                minHeight: 320,
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 12,
-                color: "rgba(232,220,199,0.3)",
-              }}
-            >
-              {t("grades.selectSubject")}
-            </div>
-          )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label={t("grades.subjects")}>
+          {subjects.map((subject) => {
+            const isOpen = expandedSubject === subject.subjectName;
+            return (
+              <div key={subject.subjectName}>
+                <SubjectAccordionHeader
+                  subject={subject}
+                  isOpen={isOpen}
+                  onToggle={() => toggleSubject(subject.subjectName)}
+                  t={t}
+                />
+                {isOpen && (
+                  <div style={{ marginTop: 10, paddingLeft: isMobile ? 0 : 2 }}>
+                    <Sandbox key={subject.subjectName} subject={subject} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
+  );
+}
+
+function SubjectAccordionHeader({
+  subject,
+  isOpen,
+  onToggle,
+  t,
+}: {
+  subject: SubjectGrades;
+  isOpen: boolean;
+  onToggle: () => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={isOpen}
+      onMouseEnter={(e) => {
+        if (!isOpen) e.currentTarget.style.borderColor = "rgba(176,141,87,0.3)";
+      }}
+      onMouseLeave={(e) => {
+        if (!isOpen) e.currentTarget.style.borderColor = "rgba(176,141,87,0.14)";
+      }}
+      style={{
+        width: "100%",
+        textAlign: "left",
+        cursor: "pointer",
+        background: isOpen ? "rgba(176,141,87,0.12)" : "#161208",
+        border: `1px solid ${isOpen ? "rgba(176,141,87,0.3)" : "rgba(176,141,87,0.14)"}`,
+        borderRadius: isOpen ? "10px 10px 0 0" : 10,
+        padding: 16,
+        transition: "border-color 0.15s, background 0.15s, border-radius 0.15s",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            style={{ flexShrink: 0, transform: isOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.2s" }}
+          >
+            <path d="M4 2l4 4-4 4" stroke={isOpen ? "#B08D57" : "rgba(176,141,87,0.45)"} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 13,
+              fontWeight: 500,
+              color: "#E8DCC7",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {subject.subjectName}
+          </span>
+        </div>
+        <span
+          style={{
+            flexShrink: 0,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 12,
+            fontWeight: 500,
+            color: isOpen ? "#B08D57" : "rgba(176,141,87,0.75)",
+            background: "rgba(176,141,87,0.08)",
+            borderRadius: 5,
+            padding: "3px 8px",
+          }}
+        >
+          {subject.isPoints ? "" : "Ø "}
+          {formatAverage(subject.currentAverage, subject.isPoints)}
+        </span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 12, paddingLeft: 22 }}>
+        {subject.grades.map((g) => (
+          <span key={g.id} title={`${g.description}${g.maxPoints != null ? "" : ` · ${t("grades.weightMeta", { n: g.weight })}`}`}>
+            <GradeBadge grade={g} />
+          </span>
+        ))}
+      </div>
+    </button>
   );
 }
 
@@ -262,88 +340,7 @@ function GradeBadge({ grade, size = "sm", dimmed = false }: { grade: Pick<Grade,
   );
 }
 
-// ── Left pane: the official report card ───────────────────────────────────────
-
-interface ReportCardProps {
-  subjects: SubjectGrades[];
-  selected: string | null;
-  onSelect: (name: string) => void;
-}
-
-function ReportCard({ subjects, selected, onSelect }: ReportCardProps) {
-  const { t } = useT();
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }} aria-label={t("grades.subjects")}>
-      {subjects.map((subject) => {
-        const isActive = subject.subjectName === selected;
-        return (
-          <button
-            key={subject.subjectName}
-            type="button"
-            onClick={() => onSelect(subject.subjectName)}
-            aria-pressed={isActive}
-            onMouseEnter={(e) => {
-              if (!isActive) e.currentTarget.style.borderColor = "rgba(176,141,87,0.3)";
-            }}
-            onMouseLeave={(e) => {
-              if (!isActive) e.currentTarget.style.borderColor = "rgba(176,141,87,0.14)";
-            }}
-            style={{
-              width: "100%",
-              textAlign: "left",
-              cursor: "pointer",
-              background: isActive ? "rgba(176,141,87,0.12)" : "#161208",
-              border: `1px solid ${isActive ? "rgba(176,141,87,0.3)" : "rgba(176,141,87,0.14)"}`,
-              borderRadius: 10,
-              padding: 16,
-              transition: "border-color 0.15s, background 0.15s",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              <span
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "#E8DCC7",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {subject.subjectName}
-              </span>
-              <span
-                style={{
-                  flexShrink: 0,
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  color: isActive ? "#B08D57" : "rgba(176,141,87,0.75)",
-                  background: "rgba(176,141,87,0.08)",
-                  borderRadius: 5,
-                  padding: "3px 8px",
-                }}
-              >
-                {subject.isPoints ? "" : "Ø "}
-                {formatAverage(subject.currentAverage, subject.isPoints)}
-              </span>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 12 }}>
-              {subject.grades.map((g) => (
-                <span key={g.id} title={`${g.description}${g.maxPoints != null ? "" : ` · ${t("grades.weightMeta", { n: g.weight })}`}`}>
-                  <GradeBadge grade={g} />
-                </span>
-              ))}
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Right pane: the sandbox simulator ─────────────────────────────────────────
+// ── Sandbox simulator ─────────────────────────────────────────────────────────
 
 interface SandboxProps {
   subject: SubjectGrades;
@@ -351,6 +348,7 @@ interface SandboxProps {
 
 function Sandbox({ subject }: SandboxProps) {
   const { t } = useT();
+  const isMobile = useIsMobile();
   const isPoints = subject.isPoints;
 
   // Deep-copy the official grades into local, editable sandbox state.
@@ -433,8 +431,9 @@ function Sandbox({ subject }: SandboxProps) {
         flexDirection: "column",
         gap: 20,
         background: "#161208",
-        border: "1px solid rgba(176,141,87,0.14)",
-        borderRadius: 10,
+        border: "1px solid rgba(176,141,87,0.3)",
+        borderTop: "none",
+        borderRadius: "0 0 10px 10px",
         padding: 20,
       }}
     >
@@ -477,7 +476,7 @@ function Sandbox({ subject }: SandboxProps) {
         onSubmit={addHypo}
         style={{
           display: "grid",
-          gridTemplateColumns: "auto auto 1fr auto",
+          gridTemplateColumns: isMobile ? "1fr 1fr" : "auto auto 1fr auto",
           gap: 12,
           alignItems: "end",
           background: "#100d08",
@@ -538,7 +537,7 @@ function Sandbox({ subject }: SandboxProps) {
             </label>
           </>
         )}
-        <label style={{ display: "block" }}>
+        <label style={{ display: "block", gridColumn: isMobile ? "1 / -1" : undefined }}>
           <div style={fieldLabel}>{t("grades.descriptionOptional")}</div>
           <input
             type="text"
@@ -566,6 +565,7 @@ function Sandbox({ subject }: SandboxProps) {
             cursor: "pointer",
             whiteSpace: "nowrap",
             transition: "background 0.2s",
+            gridColumn: isMobile ? "1 / -1" : undefined,
           }}
         >
           {t("grades.add")}

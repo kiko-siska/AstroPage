@@ -7,6 +7,7 @@ import {
 import { api, type HomeworkAttachment } from "../api/client";
 import { useCachedResource } from "../api/useCachedResource";
 import { useT } from "../i18n/LanguageContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 import RefreshButton from "../components/RefreshButton";
 
 const HOMEWORK_CACHE_KEY = "homework";
@@ -42,6 +43,7 @@ function fmtDue(iso: string, locale: string): string {
 
 export default function HomeworkPage() {
   const { t } = useT();
+  const isMobile = useIsMobile();
   // Cached across tab switches; auto-refreshes when stale, plus a manual button.
   const { data, loading, refreshing, error, lastUpdated, refresh, mutate } =
     useCachedResource<Homework[]>(HOMEWORK_CACHE_KEY, api.listHomework, {
@@ -116,9 +118,9 @@ export default function HomeworkPage() {
   }, [toast]);
 
   return (
-    <div style={{ padding: "36px 40px" }}>
+    <div style={{ padding: isMobile ? "20px 16px" : "36px 40px" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <div>
           <div
             style={{
@@ -216,7 +218,7 @@ export default function HomeworkPage() {
       {error ? (
         <ErrorPanel message={error} />
       ) : loading ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
           {Array.from({ length: 4 }, (_, i) => (
             <div
               key={i}
@@ -253,7 +255,7 @@ export default function HomeworkPage() {
           </p>
         </div>
       ) : (
-        <ul style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, listStyle: "none", padding: 0, margin: 0 }}>
+        <ul style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, listStyle: "none", padding: 0, margin: 0 }}>
           {visible.map((hw) => {
             const st = STATUS_STYLES[getHomeworkStatus(hw)];
             return (
@@ -419,6 +421,7 @@ interface DrawerProps {
 
 function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDraft, onClose }: DrawerProps) {
   const { t, locale } = useT();
+  const isMobile = useIsMobile();
   const st = STATUS_STYLES[getHomeworkStatus(homework)];
   const [attachments, setAttachments] = useState<HomeworkAttachment[]>([]);
   const [attLoading, setAttLoading] = useState(Boolean(homework.hasAttachments));
@@ -462,12 +465,13 @@ function DetailDrawer({ homework, ai, doneBusy, onToggleDone, onRunAi, onEditDra
         aria-label={homework.title}
         style={{
           position: "fixed",
-          top: 0,
+          top: isMobile ? 0 : 0,
           right: 0,
           bottom: 0,
-          width: 460,
+          width: isMobile ? "100%" : 460,
           background: "#120f0b",
-          borderLeft: "1px solid rgba(176,141,87,0.18)",
+          borderLeft: isMobile ? "none" : "1px solid rgba(176,141,87,0.18)",
+          borderTop: isMobile ? "1px solid rgba(176,141,87,0.18)" : "none",
           boxShadow: "-24px 0 60px rgba(0,0,0,0.5)",
           zIndex: 50,
           overflowY: "auto",

@@ -67,11 +67,12 @@ export default function Login() {
       {/* Card */}
       <div
         style={{
-          width: 340,
+          width: "calc(100% - 32px)",
+          maxWidth: 340,
           background: "#161208",
           borderRadius: 16,
           border: "1px solid rgba(176,141,87,0.22)",
-          padding: "36px 32px",
+          padding: "36px 24px",
           boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
           position: "relative",
           zIndex: 1,

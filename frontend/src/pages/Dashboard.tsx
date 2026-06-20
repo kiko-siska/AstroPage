@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { api, type DashboardPeriod, type DashboardSummary } from "../api/client";
 import { useCachedResource } from "../api/useCachedResource";
 import { useT } from "../i18n/LanguageContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 import RefreshButton from "../components/RefreshButton";
 
 const DASHBOARD_CACHE_KEY = "dashboard";
@@ -30,6 +31,7 @@ function localeDate(locale: string): string {
 export default function Dashboard() {
   const { user } = useAuth();
   const { t, locale } = useT();
+  const isMobile = useIsMobile();
 
   // Cached across tab switches; auto-refreshes when stale, plus a manual button.
   const { data: summary, loading, refreshing, error, lastUpdated, refresh } =
@@ -41,9 +43,9 @@ export default function Dashboard() {
   const displayName = firstName.charAt(0).toUpperCase() + firstName.slice(1);
 
   return (
-    <div style={{ padding: "36px 40px" }}>
+    <div style={{ padding: isMobile ? "20px 16px" : "36px 40px" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, marginBottom: 28, flexWrap: "wrap" }}>
         <div>
           <div
             style={{
@@ -134,7 +136,7 @@ function DashboardBody({ summary }: { summary: DashboardSummary }) {
       )}
 
       {/* Metric cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 32 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 32 }}>
         <MetricCard
           dot="#B08D57"
           dotLabelColor="rgba(176,141,87,0.55)"
@@ -187,7 +189,7 @@ function DashboardBody({ summary }: { summary: DashboardSummary }) {
 function DashboardSkeleton() {
   return (
     <>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 32 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 32 }}>
         {Array.from({ length: 3 }, (_, i) => (
           <div key={i} style={{ height: 116, background: "rgba(176,141,87,0.06)", borderRadius: 10, border: "1px solid rgba(176,141,87,0.08)" }} />
         ))}

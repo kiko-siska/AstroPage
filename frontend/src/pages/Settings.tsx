@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useT } from "../i18n/LanguageContext";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 interface AiRules {
   systemPrompt: string;
@@ -12,6 +13,7 @@ interface AiRules {
 export default function SettingsPage() {
   const { user } = useAuth();
   const { t } = useT();
+  const isMobile = useIsMobile();
   const [rules, setRules] = useState<AiRules>(() => ({
     systemPrompt: t("settings.defaultPrompt"),
     stepByStep: true,
@@ -27,7 +29,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div style={{ padding: "36px 40px", maxWidth: 680 }}>
+    <div style={{ padding: isMobile ? "20px 16px" : "36px 40px", maxWidth: 680 }}>
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(176,141,87,0.5)", marginBottom: 6 }}>
