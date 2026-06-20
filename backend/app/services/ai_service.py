@@ -53,7 +53,7 @@ def build_system_prompt(custom_prompt: str | None) -> str:
     return "\n\n".join(parts)
 
 
-def _text_prompt(subject: str | None, title: str, description: str) -> str:
+def _build_user_message(subject: str | None, title: str, description: str) -> str:
     body = description.strip()[:_MAX_ASSIGNMENT_CHARS]
     return (
         f"Subject: {subject or 'unknown'}\n"
@@ -111,7 +111,7 @@ async def generate_draft(
             continue
         parts.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
 
-    parts.append(types.Part.from_text(text=_text_prompt(subject, title, description)))
+    parts.append(types.Part.from_text(text=_build_user_message(subject, title, description)))
 
     config = types.GenerateContentConfig(
         system_instruction=build_system_prompt(custom_prompt),
