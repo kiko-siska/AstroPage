@@ -145,6 +145,29 @@ make docker         # full stack via Docker Compose
 make clean          # remove build artifacts
 ```
 
+## AI Declaration
+
+This project was built with significant assistance from **Claude Code** (Anthropic's AI coding CLI). But speed was never the goal — I deliberately chose to understand every part of the system rather than delegate design decisions to AI. Claude was a tool for getting code written faster; the learning and the architecture were mine.
+
+**What I did:**
+
+- **EduPage API exploration** — when a page wasn't returning the right data or wasn't working at all, I wrote PoC scripts to test what the `edupage-api` library actually returns, what fields exist, and where the quirks are. These weren't generated — they were debugging tools I built to understand a system I didn't control.
+- **Architecture decisions** — the core constraints (no password storage, per-subdomain session isolation, Fernet-encrypted sessions at rest, the human-in-the-loop AI draft flow) were mine. I set the requirements; Claude proposed implementation patterns.
+- **System design learning** — I intentionally took time to understand why decisions were made, not just accept Claude's first suggestion. Things like async session handling, JWT + HttpOnly cookie auth, and the caching strategy were studied and reasoned through, not just copy-pasted.
+- **Debugging and deployment** — I personally debugged the Docker CI/CD pipeline: health-check failures, the self-hosted GitHub Actions runner, and container networking issues.
+
+**What Claude Code handled:**
+
+- Boilerplate for FastAPI endpoints, Pydantic schemas, and SQLModel models once the design was settled.
+- React components, Tailwind styling, and hook patterns that I reviewed and refined.
+- CI/CD YAML, Makefile targets, and test stubs.
+- Git commits and pushes — I used Claude Code to stage and write commit messages throughout the project because doing it manually for every incremental change is tedious and error-prone.
+- Documentation — this README and the `CLAUDE.md` project instructions were written and maintained by Claude based on what I described and built.
+
+**In-app AI feature:** The homework draft assistant uses **Google Gemini** (`gemini-2.5-flash`) at runtime — this is separate from the development tooling described above.
+
+---
+
 ## Core constraints (non-negotiable)
 
 - **Never store user passwords.** Not in memory beyond a request, not in the DB, not in logs.
