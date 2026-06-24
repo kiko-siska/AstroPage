@@ -127,6 +127,19 @@ make docker         # full stack via Docker Compose
 
 ---
 
+## Design system — MANDATORY
+
+**Every frontend change must follow [`DESIGN.md`](DESIGN.md) exactly.** This file is the single source of truth for colors, typography, spacing, shadows, component states, and interaction behavior. Do not deviate from it — not even slightly — without explicit user approval.
+
+Key rules derived from the design:
+- Color palette: dark amber/copper (`#B08D57`) on near-black backgrounds (`#0a0805`, `#0e0c09`, `#161208`)
+- Fonts: Cormorant Garamond (headings), Inter (body/UI), JetBrains Mono (labels/mono)
+- All borders use `rgba(176,141,87,…)` copper tints — no plain grey borders
+- All status colors (done/overdue/due-soon/pending) use the exact token values in `DESIGN.md`
+- Grain overlay, drawer slide-in, and optimistic-update patterns are required, not optional
+
+---
+
 ## Sub-module instructions
 
 - [`backend/CLAUDE.md`](backend/CLAUDE.md) — FastAPI conventions, endpoint patterns, test setup, env vars
